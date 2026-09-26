@@ -1,0 +1,17 @@
+# OS / Cache files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Secrets & Cookies (никогда не коммитить реальные куки!)
+cookies.json
+*.cookies
+*.log
+*.tmp
+__pycache__/
+*.py[cod]
+*$py.class
