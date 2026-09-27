@@ -18,6 +18,14 @@ An MQTT bridge for **Google Family Link** integration with automatic **Home Assi
 
 ---
 
+## 🔑 Long-Term Authentication (Master Token)
+
+Browser session cookies can expire quickly due to Google session binding. For a **permanent** set-and-forget setup, you can generate a **Google Master Token (`aas_et/...`)** using the included helper script:
+
+See the [Master Token Generator Guide](./tools/README.md) for step-by-step instructions.
+
+---
+
 ## 🛠 Installation
 
 1. In Home Assistant web interface, navigate to **Settings** → **Add-ons** → **Add-on Store** (button in the bottom-right corner).
