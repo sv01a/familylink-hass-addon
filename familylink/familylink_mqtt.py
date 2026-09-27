@@ -61,24 +61,33 @@ class FamilyLinkMQTTBridge:
         self.children = []
         self.device_map = {}
         self.lock_states = {}
+        self.auth_ok = True
+        self.discovery_published = False
 
     def init_family(self):
-        """Load family members and devices"""
-        self.children = self.client_fl.get_family_members()
-        logger.info(f"Loaded children count: {len(self.children)}")
-        for ch in self.children:
-            devs = self.client_fl.get_devices(ch["id"])
-            ch["devices"] = devs
-            for d in devs:
-                safe_name = d["name"].lower().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "_")
-                self.device_map[d["id"]] = {
-                    "name": d["name"],
-                    "child_id": ch["id"],
-                    "child_name": ch["name"],
-                    "safe_name": safe_name,
-                }
-                self.lock_states[d["id"]] = False
-                logger.info(f"  Device: {d['name']} ({d['id']})")
+        """Load family members and devices without crashing on auth error"""
+        try:
+            self.children = self.client_fl.get_family_members()
+            logger.info(f"Loaded children count: {len(self.children)}")
+            for ch in self.children:
+                devs = self.client_fl.get_devices(ch["id"])
+                ch["devices"] = devs
+                for d in devs:
+                    safe_name = d["name"].lower().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "_")
+                    self.device_map[d["id"]] = {
+                        "name": d["name"],
+                        "child_id": ch["id"],
+                        "child_name": ch["name"],
+                        "safe_name": safe_name,
+                    }
+                    self.lock_states[d["id"]] = False
+                    logger.info(f"  Device: {d['name']} ({d['id']})")
+            self.auth_ok = True
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize family members (likely expired cookies): {e}")
+            self.auth_ok = False
+            return False
 
     def on_mqtt_connect(self, client, userdata, flags, rc, properties=None):
         rc_code = rc.value if hasattr(rc, "value") else rc
@@ -87,7 +96,16 @@ class FamilyLinkMQTTBridge:
             sub_topic = f"{BASE_TOPIC}/+/+/set"
             self.mqtt_client.subscribe(sub_topic)
             logger.info(f"Subscribed to command topic: {sub_topic}")
-            self.publish_discovery()
+
+            # Publish service status discovery entity
+            self.publish_status_discovery()
+
+            # Publish device discovery if family is initialized
+            if self.children and not self.discovery_published:
+                self.publish_discovery()
+                self.discovery_published = True
+
+            self.update_auth_status()
         else:
             logger.error(f"Failed to connect to MQTT broker, return code: {rc_code}")
 
@@ -131,7 +149,72 @@ class FamilyLinkMQTTBridge:
                         self.client_fl.grant_bonus_time(child_id, dev_id, mins)
 
         except Exception as e:
-            logger.error(f"Error handling MQTT message: {e}", exc_info=True)
+            logger.error(f"Error handling MQTT message: {e}")
+            if "401" in str(e) or "SESSION_COOKIE_INVALID" in str(e):
+                self.auth_ok = False
+                self.update_auth_status()
+
+    def publish_status_discovery(self):
+        """Discovery for the bridge status / persistent notification in HA"""
+        bridge_device = {
+            "identifiers": ["familylink_bridge_service"],
+            "name": "Google Family Link Bridge",
+            "manufacturer": "Google Family Link",
+            "model": "Add-on Bridge",
+            "sw_version": "1.0.0",
+        }
+
+        # Binary Sensor: Problem / Cookies Expired
+        problem_config = {
+            "name": "Family Link Cookies Expired",
+            "unique_id": "familylink_cookies_expired",
+            "state_topic": f"{BASE_TOPIC}/status/cookies_expired",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "device_class": "problem",
+            "device": bridge_device,
+        }
+        self.mqtt_client.publish(
+            f"{DISCOVERY_PREFIX}/binary_sensor/familylink/cookies_expired/config",
+            json.dumps(problem_config),
+            retain=True,
+        )
+
+        # Sensor: Status Message
+        status_sensor_config = {
+            "name": "Family Link Status",
+            "unique_id": "familylink_status_message",
+            "state_topic": f"{BASE_TOPIC}/status/message",
+            "icon": "mdi:shield-account",
+            "device": bridge_device,
+        }
+        self.mqtt_client.publish(
+            f"{DISCOVERY_PREFIX}/sensor/familylink/status_message/config",
+            json.dumps(status_sensor_config),
+            retain=True,
+        )
+
+    def update_auth_status(self):
+        """Update problem binary_sensor and notify Home Assistant via persistent_notification"""
+        if self.auth_ok:
+            self.mqtt_client.publish(f"{BASE_TOPIC}/status/cookies_expired", "OFF", retain=True)
+            self.mqtt_client.publish(f"{BASE_TOPIC}/status/message", "OK: Cookies Valid", retain=True)
+        else:
+            self.mqtt_client.publish(f"{BASE_TOPIC}/status/cookies_expired", "ON", retain=True)
+            self.mqtt_client.publish(f"{BASE_TOPIC}/status/message", "ERROR: Cookies Expired", retain=True)
+
+            # Send persistent notification to Home Assistant via MQTT Discovery service/notification
+            notification = {
+                "message": "Google Family Link session cookies have expired! Please update `cookies_text` in the add-on configuration tab.",
+                "title": "Family Link: Cookies Expired",
+                "notification_id": "familylink_cookies_expired",
+            }
+            # Also publish notification payload for users using MQTT automations
+            self.mqtt_client.publish(
+                f"{BASE_TOPIC}/notification/cookies_expired",
+                json.dumps(notification),
+                retain=True,
+            )
 
     def publish_discovery(self):
         """Register entities via Home Assistant MQTT Discovery"""
@@ -243,6 +326,20 @@ class FamilyLinkMQTTBridge:
 
     def poll_and_publish_stats(self):
         """Poll Google Family Link API and update MQTT states"""
+        # Reload cookies from file in case user updated them
+        self.client_fl.load_cookies()
+
+        if not self.children:
+            ok = self.init_family()
+            if ok and not self.discovery_published:
+                self.publish_discovery()
+                self.discovery_published = True
+
+        if not self.children:
+            self.auth_ok = False
+            self.update_auth_status()
+            return
+
         try:
             for ch in self.children:
                 child_id = ch["id"]
@@ -285,9 +382,16 @@ class FamilyLinkMQTTBridge:
                         retain=True,
                     )
 
+            if not self.auth_ok:
+                self.auth_ok = True
+                self.update_auth_status()
+
             logger.info("Screen time statistics successfully updated in MQTT.")
         except Exception as e:
-            logger.error(f"Error updating usage statistics: {e}", exc_info=True)
+            logger.error(f"Error updating usage statistics (cookies may have expired): {e}")
+            if "401" in str(e) or "SESSION_COOKIE_INVALID" in str(e):
+                self.auth_ok = False
+                self.update_auth_status()
 
     def run(self):
         self.init_family()
