@@ -290,6 +290,71 @@ class FamilyLinkClient:
             "by_app": app_stats,
         }
 
+    def get_applied_time_limits(self, account_id):
+        """Retrieve live time limits, remaining minutes, and locked state per device"""
+        url = f"{BASE_URL}/people/{account_id}/appliedTimeLimits"
+        r = self.session.get(url, headers=self._get_headers())
+        if r.status_code == 401 and self.master_token_info:
+            self._ensure_master_session(force=True)
+            r = self.session.get(url, headers=self._get_headers())
+
+        if r.status_code != 200:
+            logger.warning(f"Failed to fetch appliedTimeLimits ({r.status_code}): {r.text[:100]}")
+            return {}
+
+        data = r.json()
+        result = {}
+        for item in data.get("appliedTimeLimits", []):
+            dev_id = item.get("deviceId")
+            if not dev_id:
+                continue
+
+            remaining_mins = item.get("currentUsageRemainingMins", 0)
+            is_locked = bool(item.get("isLocked", False))
+            active_policy = item.get("activePolicy", "unknown")
+            daily_limit_mins = item.get("currentUsageLimitEntry", {}).get("usageQuotaMins", 0)
+
+            result[dev_id] = {
+                "remaining_minutes": int(remaining_mins),
+                "is_locked": is_locked,
+                "active_policy": active_policy,
+                "daily_limit_minutes": int(daily_limit_mins),
+            }
+        return result
+
+    def get_active_bonus_time(self, account_id):
+        """Calculate active bonus minutes remaining per device from timeLimit overrides"""
+        url = f"{BASE_URL}/people/{account_id}/timeLimit"
+        r = self.session.get(url, headers=self._get_headers())
+        if r.status_code == 401 and self.master_token_info:
+            self._ensure_master_session(force=True)
+            r = self.session.get(url, headers=self._get_headers())
+
+        if r.status_code != 200:
+            logger.warning(f"Failed to fetch timeLimit ({r.status_code}): {r.text[:100]}")
+            return {}
+
+        data = r.json()
+        overrides = data.get("timeLimit", {}).get("overrides", [])
+        now_ms = int(time.time() * 1000)
+
+        bonus_by_dev = defaultdict(int)
+
+        for o in overrides:
+            if o.get("action") == "unlockFor":
+                dev_id = o.get("deviceId")
+                created_ms = int(o.get("createdAtMillis", 0))
+                dur_str = o.get("unlockForData", {}).get("duration", "0s").rstrip("s")
+                duration_sec = int(dur_str) if dur_str.isdigit() else 0
+                expires_ms = created_ms + (duration_sec * 1000)
+
+                if expires_ms > now_ms:
+                    rem_sec = (expires_ms - now_ms) // 1000
+                    rem_mins = int((rem_sec + 59) // 60)
+                    bonus_by_dev[dev_id] += rem_mins
+
+        return dict(bonus_by_dev)
+
     def grant_bonus_time(self, account_id, device_id, minutes):
         """Grant bonus screen time in minutes"""
         seconds = int(minutes) * 60
@@ -357,6 +422,7 @@ def main():
     parser.add_argument("--credentials", default="credentials.json", help="Path to credentials file")
     parser.add_argument("--list", action="store_true", help="List children and devices")
     parser.add_argument("--usage", action="store_true", help="Show screen time usage")
+    parser.add_argument("--limits", action="store_true", help="Show time limits and remaining time")
     parser.add_argument("--date", help="Date in YYYY-MM-DD format")
     parser.add_argument("--bonus", type=int, help="Grant bonus time (minutes)")
     parser.add_argument("--lock", action="store_true", help="Lock device")
@@ -384,6 +450,21 @@ def main():
 
     child_id = args.child or children[0]["id"]
     child_name = next((c["name"] for c in children if c["id"] == child_id), "Child")
+
+    if args.limits:
+        limits = client.get_applied_time_limits(child_id)
+        bonuses = client.get_active_bonus_time(child_id)
+        print(f"\n⏳ Time limits and remaining time for {child_name}:")
+        devices = client.get_devices(child_id)
+        for d in devices:
+            dev_id = d["id"]
+            lim = limits.get(dev_id, {})
+            b = bonuses.get(dev_id, 0)
+            print(f"  📱 {d['name']}:")
+            print(f"     Locked: {lim.get('is_locked', False)} ({lim.get('active_policy', 'none')})")
+            print(f"     Remaining quota: {lim.get('remaining_minutes', 0)} min")
+            print(f"     Active bonus remaining: {b} min")
+        return
 
     if args.usage:
         usage = client.get_screen_time(child_id, target_date=args.date)

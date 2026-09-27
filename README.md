@@ -11,9 +11,11 @@ A custom Home Assistant Add-on repository for **Home Assistant OS** and **Superv
 An MQTT bridge for **Google Family Link** integration with automatic **Home Assistant MQTT Discovery**:
 
 - 📊 **Daily Screen Time Monitoring**: Total daily screen time and individual tracking per child's device.
+- ⏳ **Remaining Time & Live Quotas**: Direct API reading of remaining daily minutes and active bonus duration per device.
+- 🔒 **Screen Lock Status**: Real-time binary sensor (`binary_sensor`) showing whether the device is currently locked.
 - 🎮 **Top Applications Usage**: Breakdown of used apps with duration stored in sensor attributes.
-- 🔒 **Instant Device Screen Lock / Unlock**: Toggle switches (`switch`) to remotely lock and unlock devices.
-- ⏳ **Arbitrary Bonus Time**: Number input (`number`) with default value of **30 min** to grant custom extra screen time.
+- 🛑 **Remote Screen Lock**: Toggle switch (`switch`) to remotely lock/unlock screens.
+- 🎁 **Arbitrary Bonus Time**: Number input (`number`) with default value of **30 min** to grant custom extra screen time.
 - 🔑 **Permanent Authentication**: Long-lived Google Master Token (`aas_et/...`) support via Google Play Services OAuth flow.
 - 🚀 **Zero-Config Entities**: Automatically registers devices, sensors, and switches in Home Assistant via MQTT Discovery without touching `configuration.yaml`.
 
@@ -61,9 +63,11 @@ Open the **Configuration** tab of the add-on:
 
 Once started, the add-on uses **MQTT Discovery** to automatically populate your Home Assistant.
 
-### 1. View Devices & Entities
-Go to **Settings** → **Devices & services** → **MQTT**:
-- **`sensor.<child>_screen_time_today`**: Total screen time today (in minutes). Contains formatted time (`formatted_time`) and `top_apps` in attributes.
-- **`sensor.<child>_<device>_time_today`**: Screen time for specific device.
+### Entities per Child & Device:
+- **`sensor.<child>_screen_time_today`**: Total screen time spent today (min).
+- **`sensor.<child>_<device>_time_today`**: Time spent on this device today (min).
+- **`sensor.<child>_<device>_remaining_time`**: Remaining regular daily quota (min).
+- **`sensor.<child>_<device>_bonus_remaining`**: Remaining active bonus minutes.
+- **`binary_sensor.<child>_<device>_locked`**: Whether the device is locked (`on` = locked).
 - **`switch.<child>_<device>_lock`**: Turn ON to lock device, OFF to unlock.
-- **`number.<child>_<device>_add_time`**: Grant custom bonus screen time (30 min by default).
+- **`number.<child>_<device>_grant_bonus`**: Grant custom bonus screen time (30 min by default).

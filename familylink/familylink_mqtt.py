@@ -134,20 +134,24 @@ class FamilyLinkMQTTBridge:
                         if ok:
                             self.lock_states[dev_id] = True
                             self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/lock/state", "ON", retain=True)
+                            self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/is_locked/state", "ON", retain=True)
                     elif payload.upper() == "OFF":
                         ok = self.client_fl.control_device(child_id, dev_id, action="unlock")
                         if ok:
                             self.lock_states[dev_id] = False
                             self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/lock/state", "OFF", retain=True)
+                            self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/is_locked/state", "OFF", retain=True)
 
                 elif cmd_type == "grant_bonus":
                     mins = int(float(payload))
                     if mins > 0:
                         ok = self.client_fl.grant_bonus_time(child_id, dev_id, mins)
                         if ok:
-                            # Keep state value updated
                             self.bonus_states[dev_id] = mins
                             self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/bonus/state", str(mins), retain=True)
+                            # Instantly reflect active bonus
+                            self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/bonus_remaining/state", str(mins), retain=True)
+                            self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/is_locked/state", "OFF", retain=True)
 
         except Exception as e:
             logger.error(f"Error handling MQTT message: {e}")
@@ -162,7 +166,7 @@ class FamilyLinkMQTTBridge:
             "name": "Google Family Link Bridge",
             "manufacturer": "Google Family Link",
             "model": "Add-on Bridge",
-            "sw_version": "1.2.1",
+            "sw_version": "1.3.0",
         }
 
         problem_config = {
@@ -243,7 +247,7 @@ class FamilyLinkMQTTBridge:
                     "via_device": f"familylink_child_{ch['id']}",
                 }
 
-                # Device screen time sensor
+                # Device screen time used sensor
                 dev_sensor_config = {
                     "name": f"{ch['name']} {dev_name} Time Today",
                     "unique_id": f"familylink_sensor_{dev_id}_time",
@@ -255,6 +259,53 @@ class FamilyLinkMQTTBridge:
                 self.mqtt_client.publish(
                     f"{DISCOVERY_PREFIX}/sensor/familylink_{dev_id}/time/config",
                     json.dumps(dev_sensor_config),
+                    retain=True,
+                )
+
+                # Remaining screen time quota sensor
+                rem_sensor_config = {
+                    "name": f"{ch['name']} {dev_name} Remaining Time",
+                    "unique_id": f"familylink_sensor_{dev_id}_remaining_time",
+                    "state_topic": f"{BASE_TOPIC}/{dev_id}/remaining_time/state",
+                    "json_attributes_topic": f"{BASE_TOPIC}/{dev_id}/remaining_time/attributes",
+                    "unit_of_measurement": "min",
+                    "icon": "mdi:timer-sand",
+                    "device": hw_device,
+                }
+                self.mqtt_client.publish(
+                    f"{DISCOVERY_PREFIX}/sensor/familylink_{dev_id}/remaining_time/config",
+                    json.dumps(rem_sensor_config),
+                    retain=True,
+                )
+
+                # Active bonus remaining sensor
+                bonus_rem_config = {
+                    "name": f"{ch['name']} {dev_name} Active Bonus",
+                    "unique_id": f"familylink_sensor_{dev_id}_bonus_remaining",
+                    "state_topic": f"{BASE_TOPIC}/{dev_id}/bonus_remaining/state",
+                    "unit_of_measurement": "min",
+                    "icon": "mdi:gift-outline",
+                    "device": hw_device,
+                }
+                self.mqtt_client.publish(
+                    f"{DISCOVERY_PREFIX}/sensor/familylink_{dev_id}/bonus_remaining/config",
+                    json.dumps(bonus_rem_config),
+                    retain=True,
+                )
+
+                # Device locked status (binary_sensor)
+                lock_sensor_config = {
+                    "name": f"{ch['name']} {dev_name} Screen Locked",
+                    "unique_id": f"familylink_binary_{dev_id}_locked",
+                    "state_topic": f"{BASE_TOPIC}/{dev_id}/is_locked/state",
+                    "payload_on": "ON",
+                    "payload_off": "OFF",
+                    "device_class": "lock",
+                    "device": hw_device,
+                }
+                self.mqtt_client.publish(
+                    f"{DISCOVERY_PREFIX}/binary_sensor/familylink_{dev_id}/locked/config",
+                    json.dumps(lock_sensor_config),
                     retain=True,
                 )
 
@@ -292,7 +343,6 @@ class FamilyLinkMQTTBridge:
                     json.dumps(bonus_config),
                     retain=True,
                 )
-                # Set initial state to 30 min
                 self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/bonus/state", "30", retain=True)
 
                 # Clean up legacy fixed button entities
@@ -319,8 +369,9 @@ class FamilyLinkMQTTBridge:
         try:
             for ch in self.children:
                 child_id = ch["id"]
-                usage = self.client_fl.get_screen_time(child_id)
 
+                # 1. Screen time usage
+                usage = self.client_fl.get_screen_time(child_id)
                 total_minutes = usage["total_seconds"] // 60
                 hours = total_minutes // 60
                 mins = total_minutes % 60
@@ -358,11 +409,59 @@ class FamilyLinkMQTTBridge:
                         retain=True,
                     )
 
+                # 2. Live time limits, lock state, and active bonuses
+                limits_map = self.client_fl.get_applied_time_limits(child_id)
+                bonus_map = self.client_fl.get_active_bonus_time(child_id)
+
+                for dev in ch.get("devices", []):
+                    dev_id = dev["id"]
+                    lim = limits_map.get(dev_id, {})
+                    rem_mins = lim.get("remaining_minutes", 0)
+                    is_locked = lim.get("is_locked", False)
+                    active_bonus = bonus_map.get(dev_id, 0)
+
+                    # Update remaining time sensor
+                    self.mqtt_client.publish(
+                        f"{BASE_TOPIC}/{dev_id}/remaining_time/state",
+                        str(rem_mins),
+                        retain=True,
+                    )
+                    rem_attrs = {
+                        "daily_limit_minutes": lim.get("daily_limit_minutes", 0),
+                        "active_policy": lim.get("active_policy", "none"),
+                        "active_bonus_minutes": active_bonus,
+                    }
+                    self.mqtt_client.publish(
+                        f"{BASE_TOPIC}/{dev_id}/remaining_time/attributes",
+                        json.dumps(rem_attrs, ensure_ascii=False),
+                        retain=True,
+                    )
+
+                    # Update active bonus sensor
+                    self.mqtt_client.publish(
+                        f"{BASE_TOPIC}/{dev_id}/bonus_remaining/state",
+                        str(active_bonus),
+                        retain=True,
+                    )
+
+                    # Update screen locked binary sensor and lock switch state
+                    lock_payload = "ON" if is_locked else "OFF"
+                    self.mqtt_client.publish(
+                        f"{BASE_TOPIC}/{dev_id}/is_locked/state",
+                        lock_payload,
+                        retain=True,
+                    )
+                    self.mqtt_client.publish(
+                        f"{BASE_TOPIC}/{dev_id}/lock/state",
+                        lock_payload,
+                        retain=True,
+                    )
+
             if not self.auth_ok:
                 self.auth_ok = True
                 self.update_auth_status()
 
-            logger.info("Screen time statistics successfully updated in MQTT.")
+            logger.info("Screen time and limit statistics successfully updated in MQTT.")
         except Exception as e:
             logger.error(f"Error updating usage statistics: {e}")
             if "401" in str(e) or "UNAUTHENTICATED" in str(e):
