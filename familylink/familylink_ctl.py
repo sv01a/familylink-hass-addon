@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Google Family Link CLI & Automation Controller
-Supports both Master Token (gpsoauth permanent OAuth) and Browser Cookies
+Supports Master Token auto-session minting via gpsoauth (MergeSession) and Browser Cookies
 """
 
 import argparse
@@ -37,10 +37,12 @@ class FamilyLinkClient:
         self.cookies_file = Path(cookies_file)
         self.credentials_file = Path(credentials_file) if credentials_file else Path("credentials.json")
         self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        })
         self.cookies = {}
         self.master_token_info = None
-        self.oauth_access_token = None
-        self.oauth_token_expiry = 0
+        self.session_expiry = 0
         self.load_auth()
 
     def load_auth(self):
@@ -50,10 +52,11 @@ class FamilyLinkClient:
                 creds = json.loads(self.credentials_file.read_text())
                 if creds.get("master_token") and creds.get("email"):
                     self.master_token_info = creds
-                    logger.info("Loaded Master Token credentials successfully.")
+                    logger.info("Loaded Master Token configuration.")
+                    self._ensure_master_session()
                     return
             except Exception as e:
-                logger.warning(f"Failed to parse credentials file: {e}")
+                logger.warning(f"Failed to load credentials file: {e}")
 
         # Fallback to cookies
         if self.cookies_file.exists():
@@ -75,15 +78,18 @@ class FamilyLinkClient:
                         self.cookies[k] = v
             if self.cookies:
                 logger.info("Loaded browser cookies successfully.")
+                for k, v in self.cookies.items():
+                    self.session.cookies.set(k, v, domain=".google.com")
 
-    def _refresh_oauth_token(self):
-        """Fetch fresh OAuth token using gpsoauth and Master Token"""
+    def _ensure_master_session(self, force=False):
+        """Mint brand new fresh Google web session cookies from Master Token"""
         if not self.master_token_info:
-            return None
+            return
 
         now = time.time()
-        if self.oauth_access_token and now < self.oauth_token_expiry - 60:
-            return self.oauth_access_token
+        # Refresh session every 12 hours or on demand
+        if not force and self.session_expiry and now < self.session_expiry:
+            return
 
         if not gpsoauth:
             raise RuntimeError("gpsoauth library is required for Master Token mode")
@@ -92,49 +98,43 @@ class FamilyLinkClient:
         master_token = self.master_token_info["master_token"]
         android_id = self.master_token_info.get("android_id", "0123456789abcdef")
 
-        # OAuth exchange for Google Play / Kids Management scope
+        logger.info("Minting fresh Family Link session cookies via Master Token...")
         res = gpsoauth.perform_oauth(
             email=email,
             master_token=master_token,
             android_id=android_id,
-            service="oauth2:https://www.googleapis.com/auth/kidsmanagement",
+            service="weblogin:continue=https://familylink.google.com",
             app="com.google.android.apps.kids.familylink",
             client_sig="38918a453d07199354f8b19af05ec6562ced5788",
         )
 
-        auth_token = res.get("Auth")
-        if not auth_token:
-            # Fallback service scope
-            res = gpsoauth.perform_oauth(
-                email=email,
-                master_token=master_token,
-                android_id=android_id,
-                service="kidsmanagement",
-                app="com.google.android.apps.kids.familylink",
-                client_sig="38918a453d07199354f8b19af05ec6562ced5788",
-            )
-            auth_token = res.get("Auth")
+        merge_url = res.get("Auth")
+        if not merge_url or not merge_url.startswith("http"):
+            raise RuntimeError(f"Failed to exchange Master Token for weblogin session: {res}")
 
-        if not auth_token:
-            raise RuntimeError(f"Failed to obtain OAuth token from Master Token: {res}")
+        # Follow redirects on Google MergeSession endpoint to collect fresh cookies
+        resp = self.session.get(merge_url, allow_redirects=True)
+        if resp.status_code not in (200, 302):
+            raise RuntimeError(f"Failed MergeSession exchange, HTTP status: {resp.status_code}")
 
-        self.oauth_access_token = auth_token
-        self.oauth_token_expiry = now + int(res.get("Expiry", 3600))
-        logger.info("Successfully refreshed Google OAuth token via Master Token.")
-        return self.oauth_access_token
+        # Populate internal cookies dict
+        self.cookies = self.session.cookies.get_dict()
+        sapisid = self.cookies.get("SAPISID") or self.cookies.get("__Secure-3PAPISID")
+        if not sapisid:
+            raise RuntimeError("MergeSession completed, but no SAPISID cookie was set.")
+
+        self.session_expiry = now + 43200  # 12 hours
+        logger.info(f"Successfully generated permanent web session. Cookies count: {len(self.cookies)}")
 
     def _get_headers(self):
-        """Generate request headers based on active auth mechanism"""
-        if self.master_token_info:
-            token = self._refresh_oauth_token()
-            return {
-                "User-Agent": "GooglePlay/KidsManagement (Android)",
-                "Authorization": f"Bearer {token}",
-                "X-Goog-Api-Key": API_KEY,
-            }
+        """Generate request headers with valid SAPISIDHASH timestamp"""
+        self._ensure_master_session()
 
-        # Fallback to SAPISIDHASH + Cookies
-        cookie_header = "; ".join([f"{k}={v}" for k, v in self.cookies.items()])
+        cookie_dict = self.session.cookies.get_dict()
+        if not cookie_dict:
+            cookie_dict = self.cookies
+
+        cookie_header = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
             "Origin": ORIGIN,
@@ -142,17 +142,24 @@ class FamilyLinkClient:
             "X-Goog-Api-Key": API_KEY,
             "Cookie": cookie_header,
         }
-        sapisid = self.cookies.get("SAPISID") or self.cookies.get("__Secure-3PAPISID")
+
+        sapisid = cookie_dict.get("SAPISID") or cookie_dict.get("__Secure-3PAPISID")
         if sapisid:
             now = int(time.time() * 1000)
             sapisidhash = hashlib.sha1(f"{now} {sapisid} {ORIGIN}".encode("utf-8")).hexdigest()
             headers["Authorization"] = f"SAPISIDHASH {now}_{sapisidhash}"
+
         return headers
 
     def get_family_members(self):
         """Retrieve family members and child IDs"""
         url = f"{BASE_URL}/families/mine/members?allowEmptyFamily=true"
         r = self.session.get(url, headers=self._get_headers())
+        if r.status_code == 401 and self.master_token_info:
+            logger.info("Session expired, forcing Master Token re-authentication...")
+            self._ensure_master_session(force=True)
+            r = self.session.get(url, headers=self._get_headers())
+
         if r.status_code != 200:
             raise RuntimeError(f"Failed to fetch family members ({r.status_code}): {r.text}")
 
@@ -175,6 +182,10 @@ class FamilyLinkClient:
             ("capabilities", "CAPABILITY_SUPERVISION_CAPABILITIES"),
         ]
         r = self.session.get(url, headers=self._get_headers(), params=params)
+        if r.status_code == 401 and self.master_token_info:
+            self._ensure_master_session(force=True)
+            r = self.session.get(url, headers=self._get_headers(), params=params)
+
         if r.status_code != 200:
             raise RuntimeError(f"Failed to fetch devices ({r.status_code}): {r.text}")
 
@@ -199,6 +210,10 @@ class FamilyLinkClient:
             ("capabilities", "CAPABILITY_SUPERVISION_CAPABILITIES"),
         ]
         r = self.session.get(url, headers=self._get_headers(), params=params)
+        if r.status_code == 401 and self.master_token_info:
+            self._ensure_master_session(force=True)
+            r = self.session.get(url, headers=self._get_headers(), params=params)
+
         if r.status_code != 200:
             raise RuntimeError(f"Failed to fetch usage statistics ({r.status_code}): {r.text}")
 
@@ -296,6 +311,12 @@ class FamilyLinkClient:
         headers = self._get_headers()
         headers["Content-Type"] = "application/json+protobuf"
         r = self.session.post(url, headers=headers, data=json.dumps(payload))
+        if r.status_code == 401 and self.master_token_info:
+            self._ensure_master_session(force=True)
+            headers = self._get_headers()
+            headers["Content-Type"] = "application/json+protobuf"
+            r = self.session.post(url, headers=headers, data=json.dumps(payload))
+
         if r.status_code == 200:
             logger.info(f"Successfully granted +{minutes}m to device {device_id}!")
             return True
@@ -316,6 +337,12 @@ class FamilyLinkClient:
         headers = self._get_headers()
         headers["Content-Type"] = "application/json+protobuf"
         r = self.session.post(url, headers=headers, data=json.dumps(payload))
+        if r.status_code == 401 and self.master_token_info:
+            self._ensure_master_session(force=True)
+            headers = self._get_headers()
+            headers["Content-Type"] = "application/json+protobuf"
+            r = self.session.post(url, headers=headers, data=json.dumps(payload))
+
         if r.status_code == 200:
             logger.info(f"Device successfully {action}ed!")
             return True
