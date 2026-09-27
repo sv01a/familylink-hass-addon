@@ -53,9 +53,10 @@ For each supervised phone or tablet:
 - Turn **ON**: Instantly locks the child's screen.
 - Turn **OFF**: Unlocks the device screen.
 
-### 2. Quick Bonus Button
-- `button.<child_name>_<device_name>_30m` (+30 minutes)
-Pressing the button immediately grants extra 30 minutes of screen time on top of daily limits.
+### 2. Add Bonus Screen Time (Number Entity)
+- **Entity ID**: `number.<child_name>_<device_name>_add_time`
+- Default value is **30 minutes**.
+- You can change it to any arbitrary duration (15, 30, 45, 60, etc.) and hit enter/press to grant extra screen time.
 
 ---
 
@@ -78,8 +79,8 @@ entities:
     entities:
       - entity: switch.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_lock
         name: "Блокировка экрана"
-      - entity: button.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_30m
-        name: "Добавить +30 мин"
+      - entity: number.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_grant_bonus
+        name: "Добавить время (мин)"
   - type: custom:fold-entity-row
     head:
       entity: sensor.sofiia_flip_5_sm_f731n_sofiia_flip_5_sm_f731n_time_today
@@ -88,8 +89,8 @@ entities:
     entities:
       - entity: switch.sofiia_flip_5_sm_f731n_sofiia_flip_5_sm_f731n_lock
         name: "Блокировка экрана"
-      - entity: button.sofiia_flip_5_sm_f731n_sofiia_flip_5_sm_f731n_30m
-        name: "Добавить +30 мин"
+      - entity: number.sofiia_flip_5_sm_f731n_sofiia_flip_5_sm_f731n_grant_bonus
+        name: "Добавить время (мин)"
   - type: custom:fold-entity-row
     head:
       entity: sensor.sofiia_mi_8_sofiia_mi_8_time_today
@@ -98,8 +99,8 @@ entities:
     entities:
       - entity: switch.sofiia_mi_8_sofiia_mi_8_lock
         name: "Блокировка экрана"
-      - entity: button.sofiia_mi_8_sofiia_mi_8_30m
-        name: "Добавить +30 мин"
+      - entity: number.sofiia_mi_8_sofiia_mi_8_grant_bonus
+        name: "Добавить время (мин)"
 ```
 
 ---
