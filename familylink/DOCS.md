@@ -58,10 +58,10 @@ For each supervised phone or tablet:
 - Turn **ON**: Instantly locks the child's screen.
 - Turn **OFF**: Unlocks the device screen.
 
-### 2. Add Bonus Screen Time (Number Entity)
-- **Entity ID**: `number.<child_name>_<device_name>_add_time`
-- Default value is **30 minutes**.
-- Enter any number of minutes to grant bonus time.
+### 2. Safe Bonus Workflow: Duration + Grant Button
+To prevent accidental bonus grants:
+1. **`number.<child_name>_<device_name>_bonus_duration`**: Set desired minutes (default is **30 min**). Changing this value **does not** grant time.
+2. **`button.<child_name>_<device_name>_grant_bonus`**: Click this button to **confirm and grant** the selected bonus time to the device.
 
 ---
 
@@ -77,15 +77,21 @@ entities:
   - type: custom:fold-entity-row
     head:
       entity: sensor.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_time_today
-      name: "Планшет"
+      name: "Планшет (потрачено)"
       icon: mdi:tablet-android
     entities:
       - entity: sensor.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_remaining_time
         name: "Остаток лимита"
+        icon: mdi:timer-sand
       - entity: sensor.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_bonus_remaining
-        name: "Активный бонус"
+        name: "Остаток бонуса"
+        icon: mdi:gift-outline
+      - entity: binary_sensor.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_screen_locked
+        name: "Экран заблокирован"
       - entity: switch.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_lock
-        name: "Блокировка экрана"
-      - entity: number.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_grant_bonus
-        name: "Выдать бонус (мин)"
+        name: "Ручная блокировка"
+      - entity: number.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_bonus_duration
+        name: "Длительность бонуса (мин)"
+      - entity: button.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_grant_bonus
+        name: "Выдать бонус"
 ```
