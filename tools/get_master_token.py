@@ -8,6 +8,7 @@ short-lived browser cookies.
 """
 
 import json
+import secrets
 import sys
 import urllib.parse
 
@@ -18,13 +19,17 @@ except ImportError:
     print("Install it with: pip install gpsoauth")
     sys.exit(1)
 
-ANDROID_ID = "0123456789abcdef"
+def generate_android_id():
+    """Generate a random 16-character hexadecimal Android ID"""
+    return secrets.token_hex(8)
 
 
 def main():
     print("=" * 70)
     print(" Google Family Link - Permanent Master Token Generator")
     print("=" * 70)
+
+    android_id = generate_android_id()
 
     email = input("\nEnter your Google parent account email: ").strip()
     if not email:
@@ -71,7 +76,7 @@ def main():
 
     print("\n[INFO] Exchanging oauth_token for a permanent Master Token...")
     try:
-        res = gpsoauth.exchange_token(email, oauth_token, ANDROID_ID)
+        res = gpsoauth.exchange_token(email, oauth_token, android_id)
         master_token = res.get("Token")
         if not master_token:
             print(f"\n❌ Token exchange failed: {res}")
@@ -81,6 +86,7 @@ def main():
         print(" ✅ MASTER TOKEN SUCCESSFULLY GENERATED!")
         print("=" * 70)
         print(f"\nEmail: {email}")
+        print(f"Android ID: {android_id}")
         print(f"\nMaster Token:\n{master_token}\n")
         print("=" * 70)
         print("Keep this Master Token secret. It is permanent and does not expire.")
@@ -89,7 +95,7 @@ def main():
         creds = {
             "email": email,
             "master_token": master_token,
-            "android_id": ANDROID_ID,
+            "android_id": android_id,
         }
         with open("credentials.json", "w") as f:
             json.dump(creds, f, indent=2)
