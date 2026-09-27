@@ -1,9 +1,9 @@
 ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# Install requirements
-RUN apk add --no-cache jq && \
-    pip install --no-cache-dir requests paho-mqtt
+# Install requirements including gpsoauth
+RUN apk add --no-cache jq python3 py3-pip && \
+    pip install --no-cache-dir requests paho-mqtt gpsoauth pycryptodomex --break-system-packages
 
 WORKDIR /app
 

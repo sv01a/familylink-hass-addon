@@ -27,6 +27,7 @@ MQTT_USER = os.getenv("MQTT_USER", "")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 300))
 COOKIES_FILE = os.getenv("COOKIES_FILE", "cookies.json")
+CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")
 
 DISCOVERY_PREFIX = "homeassistant"
 BASE_TOPIC = "familylink"
@@ -46,7 +47,7 @@ signal.signal(signal.SIGTERM, handle_signal)
 
 class FamilyLinkMQTTBridge:
     def __init__(self):
-        self.client_fl = FamilyLinkClient(cookies_file=COOKIES_FILE)
+        self.client_fl = FamilyLinkClient(cookies_file=COOKIES_FILE, credentials_file=CREDENTIALS_FILE)
         try:
             self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="familylink_bridge")
         except AttributeError:
@@ -85,7 +86,7 @@ class FamilyLinkMQTTBridge:
             self.auth_ok = True
             return True
         except Exception as e:
-            logger.error(f"Failed to initialize family members (likely expired cookies): {e}")
+            logger.error(f"Failed to initialize family members (auth check failed): {e}")
             self.auth_ok = False
             return False
 
@@ -97,10 +98,8 @@ class FamilyLinkMQTTBridge:
             self.mqtt_client.subscribe(sub_topic)
             logger.info(f"Subscribed to command topic: {sub_topic}")
 
-            # Publish service status discovery entity
             self.publish_status_discovery()
 
-            # Publish device discovery if family is initialized
             if self.children and not self.discovery_published:
                 self.publish_discovery()
                 self.discovery_published = True
@@ -150,7 +149,7 @@ class FamilyLinkMQTTBridge:
 
         except Exception as e:
             logger.error(f"Error handling MQTT message: {e}")
-            if "401" in str(e) or "SESSION_COOKIE_INVALID" in str(e):
+            if "401" in str(e) or "UNAUTHENTICATED" in str(e):
                 self.auth_ok = False
                 self.update_auth_status()
 
@@ -161,26 +160,24 @@ class FamilyLinkMQTTBridge:
             "name": "Google Family Link Bridge",
             "manufacturer": "Google Family Link",
             "model": "Add-on Bridge",
-            "sw_version": "1.0.0",
+            "sw_version": "1.1.0",
         }
 
-        # Binary Sensor: Problem / Cookies Expired
         problem_config = {
-            "name": "Family Link Cookies Expired",
-            "unique_id": "familylink_cookies_expired",
-            "state_topic": f"{BASE_TOPIC}/status/cookies_expired",
+            "name": "Family Link Auth Problem",
+            "unique_id": "familylink_auth_problem",
+            "state_topic": f"{BASE_TOPIC}/status/auth_problem",
             "payload_on": "ON",
             "payload_off": "OFF",
             "device_class": "problem",
             "device": bridge_device,
         }
         self.mqtt_client.publish(
-            f"{DISCOVERY_PREFIX}/binary_sensor/familylink/cookies_expired/config",
+            f"{DISCOVERY_PREFIX}/binary_sensor/familylink/auth_problem/config",
             json.dumps(problem_config),
             retain=True,
         )
 
-        # Sensor: Status Message
         status_sensor_config = {
             "name": "Family Link Status",
             "unique_id": "familylink_status_message",
@@ -195,26 +192,13 @@ class FamilyLinkMQTTBridge:
         )
 
     def update_auth_status(self):
-        """Update problem binary_sensor and notify Home Assistant via persistent_notification"""
         if self.auth_ok:
-            self.mqtt_client.publish(f"{BASE_TOPIC}/status/cookies_expired", "OFF", retain=True)
-            self.mqtt_client.publish(f"{BASE_TOPIC}/status/message", "OK: Cookies Valid", retain=True)
+            self.mqtt_client.publish(f"{BASE_TOPIC}/status/auth_problem", "OFF", retain=True)
+            mode = "Master Token" if self.client_fl.master_token_info else "Cookies"
+            self.mqtt_client.publish(f"{BASE_TOPIC}/status/message", f"OK: {mode} Authenticated", retain=True)
         else:
-            self.mqtt_client.publish(f"{BASE_TOPIC}/status/cookies_expired", "ON", retain=True)
-            self.mqtt_client.publish(f"{BASE_TOPIC}/status/message", "ERROR: Cookies Expired", retain=True)
-
-            # Send persistent notification to Home Assistant via MQTT Discovery service/notification
-            notification = {
-                "message": "Google Family Link session cookies have expired! Please update `cookies_text` in the add-on configuration tab.",
-                "title": "Family Link: Cookies Expired",
-                "notification_id": "familylink_cookies_expired",
-            }
-            # Also publish notification payload for users using MQTT automations
-            self.mqtt_client.publish(
-                f"{BASE_TOPIC}/notification/cookies_expired",
-                json.dumps(notification),
-                retain=True,
-            )
+            self.mqtt_client.publish(f"{BASE_TOPIC}/status/auth_problem", "ON", retain=True)
+            self.mqtt_client.publish(f"{BASE_TOPIC}/status/message", "ERROR: Authentication Failed", retain=True)
 
     def publish_discovery(self):
         """Register entities via Home Assistant MQTT Discovery"""
@@ -326,8 +310,7 @@ class FamilyLinkMQTTBridge:
 
     def poll_and_publish_stats(self):
         """Poll Google Family Link API and update MQTT states"""
-        # Reload cookies from file in case user updated them
-        self.client_fl.load_cookies()
+        self.client_fl.load_auth()
 
         if not self.children:
             ok = self.init_family()
@@ -388,8 +371,8 @@ class FamilyLinkMQTTBridge:
 
             logger.info("Screen time statistics successfully updated in MQTT.")
         except Exception as e:
-            logger.error(f"Error updating usage statistics (cookies may have expired): {e}")
-            if "401" in str(e) or "SESSION_COOKIE_INVALID" in str(e):
+            logger.error(f"Error updating usage statistics: {e}")
+            if "401" in str(e) or "UNAUTHENTICATED" in str(e):
                 self.auth_ok = False
                 self.update_auth_status()
 

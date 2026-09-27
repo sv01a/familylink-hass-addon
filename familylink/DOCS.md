@@ -10,14 +10,22 @@ A Home Assistant Add-on for **Supervised** and **OS** installations to manage ch
 - 🎮 **Top Apps Breakdown**: Real-time list of most used apps and their durations saved in sensor attributes.
 - 🔒 **Remote Screen Lock**: Switch to lock or unlock devices on demand.
 - ⏳ **Bonus Time Management**: Buttons to add +15, +30, or +60 minutes, plus custom bonus duration input.
+- 🔑 **Dual Authentication**: Permanent Master Token (OAuth) or Browser Cookies.
 - 🚀 **MQTT Discovery**: Automatic entity creation in Home Assistant without manual YAML editing.
 
 ---
 
-## Installation
+## Authentication Modes
 
-1. Add this repository to your **Add-on Store** repositories list.
-2. Select **Google Family Link Bridge** and click **Install**.
+### Mode 1: Master Token (Recommended, Permanent)
+Generate a permanent Google Master Token using `tools/get_master_token.py` and configure:
+- `google_email`: your parent Google account email.
+- `master_token`: the token string (`aas_et/...`).
+- `android_id`: the 16-hex Android ID from `credentials.json`.
+
+### Mode 2: Browser Cookies (Fallback)
+If you prefer cookies, leave `master_token` empty and provide:
+- `cookies_text`: Google account cookies string.
 
 ---
 
@@ -25,30 +33,14 @@ A Home Assistant Add-on for **Supervised** and **OS** installations to manage ch
 
 In the **Configuration** tab of the add-on, provide:
 
-- `mqtt_host`: Hostname or IP of your Mosquitto broker (default: `core-mosquitto`).
-- `mqtt_port`: MQTT port (default: `1883`).
-- `mqtt_user`: MQTT username (optional).
-- `mqtt_password`: MQTT password (optional).
-- `poll_interval`: Polling interval in seconds (default: `300` = 5 minutes).
-- `cookies_text`: Google account cookies string (or contents of `cookies.json`).
-
-Alternatively, you can place a `cookies.json` file inside your Home Assistant config directory:
-```text
-/config/familylink/cookies.json
-```
-
----
-
-## Entities Created in Home Assistant
-
-For each child and supervised device:
-
-| Entity Type | Entity ID Example | Description |
+| Field | Type | Description |
 |---|---|---|
-| Sensor | `sensor.<child>_screen_time_today` | Total daily screen time (minutes) + app list in attributes |
-| Sensor | `sensor.<child>_<device>_time_today` | Screen time for the specific device (minutes) |
-| Switch | `switch.<child>_<device>_lock` | Remotely lock (`ON`) or unlock (`OFF`) the device |
-| Button | `button.<child>_<device>_15m` | Grant +15 minutes of bonus time |
-| Button | `button.<child>_<device>_30m` | Grant +30 minutes of bonus time |
-| Button | `button.<child>_<device>_60m` | Grant +60 minutes of bonus time |
-| Number | `number.<child>_<device>_grant_bonus` | Enter custom bonus minutes (5 to 240) |
+| `mqtt_host` | string | Hostname of your Mosquitto broker (default: `core-mosquitto`). |
+| `mqtt_port` | port | MQTT port (default: `1883`). |
+| `mqtt_user` | string | MQTT username (optional). |
+| `mqtt_password` | password | MQTT password (optional). |
+| `poll_interval` | int | Polling interval in seconds (default: `300` = 5 minutes). |
+| `google_email` | string | Parent Google email for Master Token authentication. |
+| `master_token` | password | Permanent Google Master Token (`aas_et/...`). |
+| `android_id` | string | 16-hex Android client ID. |
+| `cookies_text` | string | Fallback browser cookies. |

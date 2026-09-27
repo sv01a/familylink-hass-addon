@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Google Family Link CLI & Automation Controller
+Supports both Master Token (gpsoauth permanent OAuth) and Browser Cookies
 """
 
 import argparse
@@ -13,6 +14,11 @@ from pathlib import Path
 import sys
 import time
 import requests
+
+try:
+    import gpsoauth
+except ImportError:
+    gpsoauth = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,44 +33,115 @@ API_KEY = "AIzaSyAQb1gupaJhY3CXQy2xmTwJMcjmot3M2hw"
 
 
 class FamilyLinkClient:
-    def __init__(self, cookies_file="cookies.json"):
+    def __init__(self, cookies_file="cookies.json", credentials_file=None):
         self.cookies_file = Path(cookies_file)
+        self.credentials_file = Path(credentials_file) if credentials_file else Path("credentials.json")
         self.session = requests.Session()
         self.cookies = {}
-        self.load_cookies()
+        self.master_token_info = None
+        self.oauth_access_token = None
+        self.oauth_token_expiry = 0
+        self.load_auth()
 
-    def load_cookies(self):
-        """Load cookies from json or raw Netscape string"""
-        if not self.cookies_file.exists():
-            logger.error(f"Cookies file {self.cookies_file} not found!")
-            sys.exit(1)
+    def load_auth(self):
+        """Load credentials from credentials.json (Master Token) or cookies.json"""
+        if self.credentials_file.exists():
+            try:
+                creds = json.loads(self.credentials_file.read_text())
+                if creds.get("master_token") and creds.get("email"):
+                    self.master_token_info = creds
+                    logger.info("Loaded Master Token credentials successfully.")
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to parse credentials file: {e}")
 
-        content = self.cookies_file.read_text().strip()
-        if content.startswith("{") or content.startswith("["):
-            data = json.loads(content)
-            if isinstance(data, list):
-                for c in data:
-                    self.cookies[c["name"]] = c["value"]
-            elif isinstance(data, dict):
-                self.cookies = data
-        else:
-            for line in content.split(";"):
-                if "=" in line:
-                    k, v = line.strip().split("=", 1)
-                    self.cookies[k] = v
+        # Fallback to cookies
+        if self.cookies_file.exists():
+            content = self.cookies_file.read_text().strip()
+            if content.startswith("{") or content.startswith("["):
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, list):
+                        for c in data:
+                            self.cookies[c["name"]] = c["value"]
+                    elif isinstance(data, dict):
+                        self.cookies = data
+                except Exception as e:
+                    logger.warning(f"Failed to parse cookies JSON: {e}")
+            else:
+                for line in content.split(";"):
+                    if "=" in line:
+                        k, v = line.strip().split("=", 1)
+                        self.cookies[k] = v
+            if self.cookies:
+                logger.info("Loaded browser cookies successfully.")
 
+    def _refresh_oauth_token(self):
+        """Fetch fresh OAuth token using gpsoauth and Master Token"""
+        if not self.master_token_info:
+            return None
+
+        now = time.time()
+        if self.oauth_access_token and now < self.oauth_token_expiry - 60:
+            return self.oauth_access_token
+
+        if not gpsoauth:
+            raise RuntimeError("gpsoauth library is required for Master Token mode")
+
+        email = self.master_token_info["email"]
+        master_token = self.master_token_info["master_token"]
+        android_id = self.master_token_info.get("android_id", "0123456789abcdef")
+
+        # OAuth exchange for Google Play / Kids Management scope
+        res = gpsoauth.perform_oauth(
+            email=email,
+            master_token=master_token,
+            android_id=android_id,
+            service="oauth2:https://www.googleapis.com/auth/kidsmanagement",
+            app="com.google.android.apps.kids.familylink",
+            client_sig="38918a453d07199354f8b19af05ec6562ced5788",
+        )
+
+        auth_token = res.get("Auth")
+        if not auth_token:
+            # Fallback service scope
+            res = gpsoauth.perform_oauth(
+                email=email,
+                master_token=master_token,
+                android_id=android_id,
+                service="kidsmanagement",
+                app="com.google.android.apps.kids.familylink",
+                client_sig="38918a453d07199354f8b19af05ec6562ced5788",
+            )
+            auth_token = res.get("Auth")
+
+        if not auth_token:
+            raise RuntimeError(f"Failed to obtain OAuth token from Master Token: {res}")
+
+        self.oauth_access_token = auth_token
+        self.oauth_token_expiry = now + int(res.get("Expiry", 3600))
+        logger.info("Successfully refreshed Google OAuth token via Master Token.")
+        return self.oauth_access_token
+
+    def _get_headers(self):
+        """Generate request headers based on active auth mechanism"""
+        if self.master_token_info:
+            token = self._refresh_oauth_token()
+            return {
+                "User-Agent": "GooglePlay/KidsManagement (Android)",
+                "Authorization": f"Bearer {token}",
+                "X-Goog-Api-Key": API_KEY,
+            }
+
+        # Fallback to SAPISIDHASH + Cookies
         cookie_header = "; ".join([f"{k}={v}" for k, v in self.cookies.items()])
-        self.headers = {
+        headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
             "Origin": ORIGIN,
             "Referer": f"{ORIGIN}/",
             "X-Goog-Api-Key": API_KEY,
             "Cookie": cookie_header,
         }
-
-    def _get_headers(self):
-        """Update Authorization header with fresh millisecond timestamp"""
-        headers = dict(self.headers)
         sapisid = self.cookies.get("SAPISID") or self.cookies.get("__Secure-3PAPISID")
         if sapisid:
             now = int(time.time() * 1000)
@@ -250,6 +327,7 @@ class FamilyLinkClient:
 def main():
     parser = argparse.ArgumentParser(description="Google Family Link Automation Tool")
     parser.add_argument("--cookies", default="cookies.json", help="Path to cookies file")
+    parser.add_argument("--credentials", default="credentials.json", help="Path to credentials file")
     parser.add_argument("--list", action="store_true", help="List children and devices")
     parser.add_argument("--usage", action="store_true", help="Show screen time usage")
     parser.add_argument("--date", help="Date in YYYY-MM-DD format")
@@ -260,7 +338,7 @@ def main():
     parser.add_argument("--device", help="Device ID (optional, defaults to first device)")
 
     args = parser.parse_args()
-    client = FamilyLinkClient(cookies_file=args.cookies)
+    client = FamilyLinkClient(cookies_file=args.cookies, credentials_file=args.credentials)
 
     if args.list:
         children = client.get_family_members()
