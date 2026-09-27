@@ -25,4 +25,4 @@ schema:
   mqtt_user: str?
   mqtt_password: password?
   poll_interval: int
-  cookies_text: text?
+  cookies_text: str?
