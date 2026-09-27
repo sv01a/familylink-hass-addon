@@ -7,9 +7,11 @@
 ehthumbs.db
 Thumbs.db
 
-# Secrets & Cookies (никогда не коммитить реальные куки!)
+# Secrets & Credentials (never commit real tokens or cookies!)
 cookies.json
 *.cookies
+credentials.json
+*.token
 *.log
 *.tmp
 __pycache__/
