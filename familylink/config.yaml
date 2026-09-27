@@ -1,6 +1,6 @@
 name: "Google Family Link Bridge"
 description: "MQTT bridge for Google Family Link screen time tracking and device management"
-version: "1.1.1"
+version: "1.1.2"
 slug: "familylink_bridge"
 url: "https://github.com/sv01a/familylink-hass-addon/tree/main/familylink"
 init: false
