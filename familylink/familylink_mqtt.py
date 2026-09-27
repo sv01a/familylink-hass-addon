@@ -21,12 +21,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("familylink_mqtt")
 
-# Настройки MQTT (можно переопределить через переменные окружения)
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_USER = os.getenv("MQTT_USER", "")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 300))  # 5 минут по умолчанию
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 300))
 COOKIES_FILE = os.getenv("COOKIES_FILE", "cookies.json")
 
 DISCOVERY_PREFIX = "homeassistant"
@@ -34,10 +33,12 @@ BASE_TOPIC = "familylink"
 
 running = True
 
+
 def handle_signal(sig, frame):
     global running
-    logger.info("Получен сигнал завершения...")
+    logger.info("Termination signal received...")
     running = False
+
 
 signal.signal(signal.SIGINT, handle_signal)
 signal.signal(signal.SIGTERM, handle_signal)
@@ -46,11 +47,11 @@ signal.signal(signal.SIGTERM, handle_signal)
 class FamilyLinkMQTTBridge:
     def __init__(self):
         self.client_fl = FamilyLinkClient(cookies_file=COOKIES_FILE)
-        # Поддержка paho-mqtt v1 и v2
         try:
             self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="familylink_bridge")
         except AttributeError:
             self.mqtt_client = mqtt.Client(client_id="familylink_bridge")
+
         if MQTT_USER:
             self.mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 
@@ -58,13 +59,13 @@ class FamilyLinkMQTTBridge:
         self.mqtt_client.on_message = self.on_mqtt_message
 
         self.children = []
-        self.device_map = {}  # device_id -> {name, child_id, safe_name}
-        self.lock_states = {}  # device_id -> bool
+        self.device_map = {}
+        self.lock_states = {}
 
     def init_family(self):
-        """Загрузка детей и их устройств"""
+        """Load family members and devices"""
         self.children = self.client_fl.get_family_members()
-        logger.info(f"Загружено детей: {len(self.children)}")
+        logger.info(f"Loaded children count: {len(self.children)}")
         for ch in self.children:
             devs = self.client_fl.get_devices(ch["id"])
             ch["devices"] = devs
@@ -77,27 +78,25 @@ class FamilyLinkMQTTBridge:
                     "safe_name": safe_name,
                 }
                 self.lock_states[d["id"]] = False
-                logger.info(f"  Устройство: {d['name']} ({d['id']})")
+                logger.info(f"  Device: {d['name']} ({d['id']})")
 
     def on_mqtt_connect(self, client, userdata, flags, rc, properties=None):
         rc_code = rc.value if hasattr(rc, "value") else rc
         if rc_code == 0:
-            logger.info("Подключено к MQTT брокеру!")
-            # Подписываемся на команды
+            logger.info("Connected to MQTT broker successfully!")
             sub_topic = f"{BASE_TOPIC}/+/+/set"
             self.mqtt_client.subscribe(sub_topic)
-            logger.info(f"Подписка на топик команд: {sub_topic}")
+            logger.info(f"Subscribed to command topic: {sub_topic}")
             self.publish_discovery()
         else:
-            logger.error(f"Ошибка подключения к MQTT, код: {rc}")
+            logger.error(f"Failed to connect to MQTT broker, return code: {rc_code}")
 
     def on_mqtt_message(self, client, userdata, msg):
         try:
             topic = msg.topic
             payload = msg.payload.decode("utf-8").strip()
-            logger.info(f"Получена команда MQTT: {topic} -> {payload}")
+            logger.info(f"MQTT command received: {topic} -> {payload}")
 
-            # Формат топика: familylink/<device_id>/<command_type>/set
             parts = topic.split("/")
             if len(parts) >= 4:
                 dev_id = parts[1]
@@ -105,7 +104,7 @@ class FamilyLinkMQTTBridge:
 
                 dev_info = self.device_map.get(dev_id)
                 if not dev_info:
-                    logger.warning(f"Неизвестное устройство: {dev_id}")
+                    logger.warning(f"Unknown device: {dev_id}")
                     return
 
                 child_id = dev_info["child_id"]
@@ -123,25 +122,22 @@ class FamilyLinkMQTTBridge:
                             self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/lock/state", "OFF", retain=True)
 
                 elif cmd_type.startswith("bonus_"):
-                    # Кнопки с фиксированным бонусом (bonus_15, bonus_30, bonus_60)
                     mins = int(cmd_type.split("_")[1])
                     self.client_fl.grant_bonus_time(child_id, dev_id, mins)
 
                 elif cmd_type == "grant_bonus":
-                    # Ввод произвольных минут
                     mins = int(float(payload))
                     if mins > 0:
                         self.client_fl.grant_bonus_time(child_id, dev_id, mins)
 
         except Exception as e:
-            logger.error(f"Ошибка обработки команды MQTT: {e}", exc_info=True)
+            logger.error(f"Error handling MQTT message: {e}", exc_info=True)
 
     def publish_discovery(self):
-        """Регистрация устройств и сенсоров через Home Assistant MQTT Discovery"""
-        logger.info("Отправка MQTT Discovery для Home Assistant...")
+        """Register entities via Home Assistant MQTT Discovery"""
+        logger.info("Publishing MQTT Discovery configs to Home Assistant...")
 
         for ch in self.children:
-            child_safe = ch["name"].lower().replace(" ", "_")
             child_device = {
                 "identifiers": [f"familylink_child_{ch['id']}"],
                 "name": f"Family Link ({ch['name']})",
@@ -149,7 +145,7 @@ class FamilyLinkMQTTBridge:
                 "model": "Supervised Child",
             }
 
-            # 1. Главный сенсор: общее экранное время за день
+            # 1. Total daily screen time
             usage_config = {
                 "name": f"{ch['name']} Screen Time Today",
                 "unique_id": f"familylink_{ch['id']}_screen_time_today",
@@ -165,11 +161,10 @@ class FamilyLinkMQTTBridge:
                 retain=True,
             )
 
-            # 2. Сущности для каждого устройства
+            # 2. Per-device entities
             for dev in ch.get("devices", []):
                 dev_id = dev["id"]
                 dev_name = dev["name"]
-                dev_safe = self.device_map[dev_id]["safe_name"]
 
                 hw_device = {
                     "identifiers": [f"familylink_dev_{dev_id}"],
@@ -179,7 +174,7 @@ class FamilyLinkMQTTBridge:
                     "via_device": f"familylink_child_{ch['id']}",
                 }
 
-                # Сенсор времени устройства
+                # Device screen time sensor
                 dev_sensor_config = {
                     "name": f"{ch['name']} {dev_name} Time Today",
                     "unique_id": f"familylink_sensor_{dev_id}_time",
@@ -194,7 +189,7 @@ class FamilyLinkMQTTBridge:
                     retain=True,
                 )
 
-                # Переключатель блокировки
+                # Lock switch
                 lock_config = {
                     "name": f"{ch['name']} {dev_name} Lock",
                     "unique_id": f"familylink_switch_{dev_id}_lock",
@@ -209,7 +204,7 @@ class FamilyLinkMQTTBridge:
                     retain=True,
                 )
 
-                # Кнопки быстрого бонуса: +15, +30, +60 минут
+                # Quick bonus buttons (+15, +30, +60 min)
                 for mins in [15, 30, 60]:
                     btn_config = {
                         "name": f"{ch['name']} {dev_name} +{mins}m",
@@ -225,7 +220,7 @@ class FamilyLinkMQTTBridge:
                         retain=True,
                     )
 
-                # Числовой ввод бонуса (Number)
+                # Custom bonus input (Number)
                 num_config = {
                     "name": f"{ch['name']} {dev_name} Grant Bonus",
                     "unique_id": f"familylink_num_{dev_id}_bonus",
@@ -244,10 +239,10 @@ class FamilyLinkMQTTBridge:
                     retain=True,
                 )
 
-        logger.info("MQTT Discovery опубликован.")
+        logger.info("MQTT Discovery configs published successfully.")
 
     def poll_and_publish_stats(self):
-        """Периодический опрос Google API и публикация сенсоров"""
+        """Poll Google Family Link API and update MQTT states"""
         try:
             for ch in self.children:
                 child_id = ch["id"]
@@ -256,16 +251,14 @@ class FamilyLinkMQTTBridge:
                 total_minutes = usage["total_seconds"] // 60
                 hours = total_minutes // 60
                 mins = total_minutes % 60
-                time_str = f"{hours} ч {mins} мин" if hours else f"{mins} мин"
+                time_str = f"{hours}h {mins}m" if hours else f"{mins}m"
 
-                # 1. Публикуем общее время
                 self.mqtt_client.publish(
                     f"{BASE_TOPIC}/{child_id}/usage/state",
                     str(total_minutes),
                     retain=True,
                 )
 
-                # Топ приложений в атрибуты
                 apps_summary = [
                     {"title": a["title"], "minutes": a["seconds"] // 60}
                     for a in usage.get("by_app", [])[:15]
@@ -281,7 +274,6 @@ class FamilyLinkMQTTBridge:
                     retain=True,
                 )
 
-                # 2. Публикуем время по каждому девайсу
                 device_sec_map = {d["device_id"]: d["seconds"] for d in usage.get("by_device", [])}
                 for dev in ch.get("devices", []):
                     dev_id = dev["id"]
@@ -293,9 +285,9 @@ class FamilyLinkMQTTBridge:
                         retain=True,
                     )
 
-            logger.info("Статистика экранного времени успешно обновлена в MQTT.")
+            logger.info("Screen time statistics successfully updated in MQTT.")
         except Exception as e:
-            logger.error(f"Ошибка при опросе статистики: {e}", exc_info=True)
+            logger.error(f"Error updating usage statistics: {e}", exc_info=True)
 
     def run(self):
         self.init_family()
@@ -312,7 +304,7 @@ class FamilyLinkMQTTBridge:
                     last_poll = now
                 time.sleep(1)
         finally:
-            logger.info("Остановка MQTT клиента...")
+            logger.info("Stopping MQTT client...")
             self.mqtt_client.loop_stop()
             self.mqtt_client.disconnect()
 

@@ -1,21 +1,30 @@
 #!/usr/bin/env python3
 """
-Google Family Link CLI & Automation Controller (Lightweight, No Playwright)
+Google Family Link CLI & Automation Controller
 """
 
 import argparse
-import hashlib
-import json
-import sys
-import time
 from collections import defaultdict
 from datetime import datetime
+import hashlib
+import json
+import logging
 from pathlib import Path
+import sys
+import time
 import requests
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger("familylink_ctl")
 
 BASE_URL = "https://kidsmanagement-pa.clients6.google.com/kidsmanagement/v1"
 ORIGIN = "https://familylink.google.com"
 API_KEY = "AIzaSyAQb1gupaJhY3CXQy2xmTwJMcjmot3M2hw"
+
 
 class FamilyLinkClient:
     def __init__(self, cookies_file="cookies.json"):
@@ -25,29 +34,25 @@ class FamilyLinkClient:
         self.load_cookies()
 
     def load_cookies(self):
-        """Загрузка кук из json файла или Netscape cookies.txt"""
+        """Load cookies from json or raw Netscape string"""
         if not self.cookies_file.exists():
-            print(f"❌ Файл кук {self.cookies_file} не найден!")
-            print("Создай cookies.json со своими куками Google (SAPISID, SID, HSID, SSID и др.)")
+            logger.error(f"Cookies file {self.cookies_file} not found!")
             sys.exit(1)
 
         content = self.cookies_file.read_text().strip()
         if content.startswith("{") or content.startswith("["):
             data = json.loads(content)
             if isinstance(data, list):
-                # Формат экспорта расширений (Cookie-Editor / EditThisCookie)
                 for c in data:
                     self.cookies[c["name"]] = c["value"]
             elif isinstance(data, dict):
                 self.cookies = data
         else:
-            # Текстовый формат netscape / raw string
             for line in content.split(";"):
                 if "=" in line:
                     k, v = line.strip().split("=", 1)
                     self.cookies[k] = v
 
-        # Собираем заголовок Cookie
         cookie_header = "; ".join([f"{k}={v}" for k, v in self.cookies.items()])
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
@@ -58,7 +63,7 @@ class FamilyLinkClient:
         }
 
     def _get_headers(self):
-        """Обновление Authorization с актуальным timestamp"""
+        """Update Authorization header with fresh millisecond timestamp"""
         headers = dict(self.headers)
         sapisid = self.cookies.get("SAPISID") or self.cookies.get("__Secure-3PAPISID")
         if sapisid:
@@ -68,11 +73,11 @@ class FamilyLinkClient:
         return headers
 
     def get_family_members(self):
-        """Получить членов семьи и ID детей"""
+        """Retrieve family members and child IDs"""
         url = f"{BASE_URL}/families/mine/members?allowEmptyFamily=true"
         r = self.session.get(url, headers=self._get_headers())
         if r.status_code != 200:
-            raise RuntimeError(f"Ошибка получения членов семьи ({r.status_code}): {r.text}")
+            raise RuntimeError(f"Failed to fetch family members ({r.status_code}): {r.text}")
 
         data = r.json()
         children = []
@@ -86,7 +91,7 @@ class FamilyLinkClient:
         return children
 
     def get_devices(self, account_id):
-        """Получить список устройств ребенка"""
+        """Retrieve devices for a given child account"""
         url = f"{BASE_URL}/people/{account_id}/appsandusage"
         params = [
             ("capabilities", "CAPABILITY_APP_USAGE_SESSION"),
@@ -94,7 +99,7 @@ class FamilyLinkClient:
         ]
         r = self.session.get(url, headers=self._get_headers(), params=params)
         if r.status_code != 200:
-            raise RuntimeError(f"Ошибка получения устройств ({r.status_code}): {r.text}")
+            raise RuntimeError(f"Failed to fetch devices ({r.status_code}): {r.text}")
 
         data = r.json()
         devices = []
@@ -110,10 +115,7 @@ class FamilyLinkClient:
         return devices
 
     def get_screen_time(self, account_id, target_date=None):
-        """
-        Получить статистику экранного времени ребенка.
-        target_date: строка YYYY-MM-DD или None (сегодня / последний день с активностью)
-        """
+        """Retrieve screen time stats for a child"""
         url = f"{BASE_URL}/people/{account_id}/appsandusage"
         params = [
             ("capabilities", "CAPABILITY_APP_USAGE_SESSION"),
@@ -121,7 +123,7 @@ class FamilyLinkClient:
         ]
         r = self.session.get(url, headers=self._get_headers(), params=params)
         if r.status_code != 200:
-            raise RuntimeError(f"Ошибка получения статистики использования ({r.status_code}): {r.text}")
+            raise RuntimeError(f"Failed to fetch usage statistics ({r.status_code}): {r.text}")
 
         data = r.json()
 
@@ -146,7 +148,7 @@ class FamilyLinkClient:
                 dt = datetime.strptime(target_date, "%Y-%m-%d")
                 target_tuple = (dt.year, dt.month, dt.day)
             except ValueError:
-                raise ValueError("Дата должна быть в формате YYYY-MM-DD")
+                raise ValueError("Date must be in format YYYY-MM-DD")
         else:
             all_dates = [
                 (s["date"]["year"], s["date"]["month"], s["date"]["day"])
@@ -197,11 +199,10 @@ class FamilyLinkClient:
         }
 
     def grant_bonus_time(self, account_id, device_id, minutes):
-        """Выдать бонусные минуты на Android устройство"""
+        """Grant bonus screen time in minutes"""
         seconds = int(minutes) * 60
         url = f"{BASE_URL}/people/{account_id}/timeLimitOverrides:batchCreate"
 
-        # 10 = Android Bonus Time override
         payload = [
             None,
             account_id,
@@ -219,10 +220,10 @@ class FamilyLinkClient:
         headers["Content-Type"] = "application/json+protobuf"
         r = self.session.post(url, headers=headers, data=json.dumps(payload))
         if r.status_code == 200:
-            print(f"✅ УСПЕШНО! Начислено +{minutes} мин на устройство {device_id}!")
+            logger.info(f"Successfully granted +{minutes}m to device {device_id}!")
             return True
         else:
-            print(f"❌ Ошибка начисления бонуса ({r.status_code}): {r.text}")
+            logger.error(f"Failed to grant bonus time ({r.status_code}): {r.text}")
             return False
 
     def control_device(self, account_id, device_id, action="lock"):
@@ -239,45 +240,45 @@ class FamilyLinkClient:
         headers["Content-Type"] = "application/json+protobuf"
         r = self.session.post(url, headers=headers, data=json.dumps(payload))
         if r.status_code == 200:
-            print(f"✅ Устройство успешно {action}ed!")
+            logger.info(f"Device successfully {action}ed!")
             return True
         else:
-            print(f"❌ Ошибка {action} ({r.status_code}): {r.text}")
+            logger.error(f"Failed to execute {action} on device ({r.status_code}): {r.text}")
             return False
+
 
 def main():
     parser = argparse.ArgumentParser(description="Google Family Link Automation Tool")
-    parser.add_argument("--cookies", default="cookies.json", help="Путь к cookies.json")
-    parser.add_argument("--list", action="store_true", help="Показать детей и устройства")
-    parser.add_argument("--usage", action="store_true", help="Показать использованное экранное время")
-    parser.add_argument("--date", help="Дата (YYYY-MM-DD)")
-    parser.add_argument("--bonus", type=int, help="Выдать бонусное время (в минутах)")
-    parser.add_argument("--lock", action="store_true", help="Заблокировать устройство")
-    parser.add_argument("--unlock", action="store_true", help="Разблокировать устройство")
-    parser.add_argument("--child", help="ID ребенка (опционально, если один — автовыбор)")
-    parser.add_argument("--device", help="ID устройства (опционально, если одно — автовыбор)")
+    parser.add_argument("--cookies", default="cookies.json", help="Path to cookies file")
+    parser.add_argument("--list", action="store_true", help="List children and devices")
+    parser.add_argument("--usage", action="store_true", help="Show screen time usage")
+    parser.add_argument("--date", help="Date in YYYY-MM-DD format")
+    parser.add_argument("--bonus", type=int, help="Grant bonus time (minutes)")
+    parser.add_argument("--lock", action="store_true", help="Lock device")
+    parser.add_argument("--unlock", action="store_true", help="Unlock device")
+    parser.add_argument("--child", help="Child ID (optional, defaults to first child)")
+    parser.add_argument("--device", help="Device ID (optional, defaults to first device)")
 
     args = parser.parse_args()
     client = FamilyLinkClient(cookies_file=args.cookies)
 
     if args.list:
         children = client.get_family_members()
-        print(f"Найдено детей: {len(children)}")
+        print(f"Children found: {len(children)}")
         for ch in children:
-            print(f"\n👶 Ребенок: {ch['name']} (ID: {ch['id']})")
+            print(f"\n👤 Child: {ch['name']} (ID: {ch['id']})")
             devices = client.get_devices(ch['id'])
             for d in devices:
-                print(f"  📱 Устройство: {d['name']} (ID: {d['id']})")
+                print(f"  📱 Device: {d['name']} (ID: {d['id']})")
         return
 
-    # Авто-определение ребенка и устройства, если не заданы
     children = client.get_family_members()
     if not children:
-        print("❌ Не найдено детей под опекой!")
+        logger.error("No supervised children found!")
         return
 
     child_id = args.child or children[0]["id"]
-    child_name = next((c["name"] for c in children if c["id"] == child_id), "Ребенок")
+    child_name = next((c["name"] for c in children if c["id"] == child_id), "Child")
 
     if args.usage:
         usage = client.get_screen_time(child_id, target_date=args.date)
@@ -285,29 +286,30 @@ def main():
         hours = total_sec // 3600
         mins = (total_sec % 3600) // 60
 
-        print(f"\n📊 Экранное время [{usage["date"]}] для {child_name}:")
-        print(f"   Всего: {hours} ч {mins} мин ({total_sec // 60} мин)")
+        print(f"\n📊 Screen time [{usage['date']}] for {child_name}:")
+        print(f"   Total: {hours}h {mins}m ({total_sec // 60} min)")
 
         if usage["by_device"]:
-            print("\n📱 По устройствам:")
+            print("\n📱 By device:")
             for d in usage["by_device"]:
                 dh = d["seconds"] // 3600
                 dm = (d["seconds"] % 3600) // 60
-                time_str = f"{dh} ч {dm} мин" if dh else f"{dm} мин"
-                print(f"   • {d["device_name"]}: {time_str}")
+                time_str = f"{dh}h {dm}m" if dh else f"{dm}m"
+                print(f"   • {d['device_name']}: {time_str}")
 
         if usage["by_app"]:
-            print("\n🎮 Топ приложений:")
+            print("\n🎮 Top applications:")
             for a in usage["by_app"][:10]:
                 ah = a["seconds"] // 3600
                 am = (a["seconds"] % 3600) // 60
                 as_sec = a["seconds"] % 60
-                time_str = f"{ah} ч {am} мин" if ah else (f"{am} мин {as_sec} сек" if am else f"{as_sec} сек")
-                print(f"   • {a["title"]}: {time_str}")
+                time_str = f"{ah}h {am}m" if ah else (f"{am}m {as_sec}s" if am else f"{as_sec}s")
+                print(f"   • {a['title']}: {time_str}")
         return
+
     devices = client.get_devices(child_id)
     if not devices:
-        print("❌ Не найдено устройств у ребенка!")
+        logger.error("No devices found for child!")
         return
     device_id = args.device or devices[0]["id"]
 
@@ -319,6 +321,7 @@ def main():
         client.control_device(child_id, device_id, action="unlock")
     else:
         parser.print_help()
+
 
 if __name__ == "__main__":
     main()
