@@ -138,14 +138,12 @@ class FamilyLinkMQTTBridge:
                             self.lock_states[dev_id] = False
                             self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/lock/state", "OFF", retain=True)
 
-                elif cmd_type.startswith("bonus_"):
-                    mins = int(cmd_type.split("_")[1])
+                elif cmd_type in ("bonus_30", "bonus"):
+                    # Single standard +30 min bonus
+                    mins = 30
+                    if payload.isdigit() and int(payload) > 0:
+                        mins = int(payload)
                     self.client_fl.grant_bonus_time(child_id, dev_id, mins)
-
-                elif cmd_type == "grant_bonus":
-                    mins = int(float(payload))
-                    if mins > 0:
-                        self.client_fl.grant_bonus_time(child_id, dev_id, mins)
 
         except Exception as e:
             logger.error(f"Error handling MQTT message: {e}")
@@ -160,7 +158,7 @@ class FamilyLinkMQTTBridge:
             "name": "Google Family Link Bridge",
             "manufacturer": "Google Family Link",
             "model": "Add-on Bridge",
-            "sw_version": "1.1.0",
+            "sw_version": "1.2.0",
         }
 
         problem_config = {
@@ -271,40 +269,25 @@ class FamilyLinkMQTTBridge:
                     retain=True,
                 )
 
-                # Quick bonus buttons (+15, +30, +60 min)
-                for mins in [15, 30, 60]:
-                    btn_config = {
-                        "name": f"{ch['name']} {dev_name} +{mins}m",
-                        "unique_id": f"familylink_btn_{dev_id}_plus_{mins}",
-                        "command_topic": f"{BASE_TOPIC}/{dev_id}/bonus_{mins}/set",
-                        "payload_press": "PRESS",
-                        "icon": "mdi:plus-circle-outline",
-                        "device": hw_device,
-                    }
-                    self.mqtt_client.publish(
-                        f"{DISCOVERY_PREFIX}/button/familylink_{dev_id}/bonus_{mins}/config",
-                        json.dumps(btn_config),
-                        retain=True,
-                    )
-
-                # Custom bonus input (Number)
-                num_config = {
-                    "name": f"{ch['name']} {dev_name} Grant Bonus",
-                    "unique_id": f"familylink_num_{dev_id}_bonus",
-                    "command_topic": f"{BASE_TOPIC}/{dev_id}/grant_bonus/set",
-                    "min": 5,
-                    "max": 240,
-                    "step": 5,
-                    "unit_of_measurement": "min",
-                    "mode": "box",
-                    "icon": "mdi:timer-plus-outline",
+                # Single +30 min bonus button
+                btn_config = {
+                    "name": f"{ch['name']} {dev_name} +30m",
+                    "unique_id": f"familylink_btn_{dev_id}_plus_30",
+                    "command_topic": f"{BASE_TOPIC}/{dev_id}/bonus_30/set",
+                    "payload_press": "PRESS",
+                    "icon": "mdi:plus-circle-outline",
                     "device": hw_device,
                 }
                 self.mqtt_client.publish(
-                    f"{DISCOVERY_PREFIX}/number/familylink_{dev_id}/grant_bonus/config",
-                    json.dumps(num_config),
+                    f"{DISCOVERY_PREFIX}/button/familylink_{dev_id}/bonus_30/config",
+                    json.dumps(btn_config),
                     retain=True,
                 )
+
+                # Clean up legacy entities by publishing empty payloads with retain=True
+                self.mqtt_client.publish(f"{DISCOVERY_PREFIX}/button/familylink_{dev_id}/bonus_15/config", "", retain=True)
+                self.mqtt_client.publish(f"{DISCOVERY_PREFIX}/button/familylink_{dev_id}/bonus_60/config", "", retain=True)
+                self.mqtt_client.publish(f"{DISCOVERY_PREFIX}/number/familylink_{dev_id}/grant_bonus/config", "", retain=True)
 
         logger.info("MQTT Discovery configs published successfully.")
 

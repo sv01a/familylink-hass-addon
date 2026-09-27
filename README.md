@@ -13,7 +13,7 @@ An MQTT bridge for **Google Family Link** integration with automatic **Home Assi
 - 📊 **Daily Screen Time Monitoring**: Total daily screen time and individual tracking per child's device.
 - 🎮 **Top Applications Usage**: Breakdown of used apps with duration stored in sensor attributes.
 - 🔒 **Instant Device Screen Lock / Unlock**: Toggle switches (`switch`) to remotely lock and unlock devices.
-- ⏳ **Bonus Time Management**: Quick action buttons (`+15m`, `+30m`, `+60m`) and custom duration number input (`number`).
+- ⏳ **Bonus Time Management**: Single +30m button (`button`) per device for one-click bonus screen time.
 - 🔑 **Permanent Authentication**: Long-lived Google Master Token (`aas_et/...`) support via Google Play Services OAuth flow.
 - 🚀 **Zero-Config Entities**: Automatically registers devices, sensors, buttons, and switches in Home Assistant via MQTT Discovery without touching `configuration.yaml`.
 
@@ -66,34 +66,25 @@ Go to **Settings** → **Devices & services** → **MQTT**:
 - **`sensor.<child>_screen_time_today`**: Total screen time today (in minutes). Contains formatted time (`formatted_time`) and `top_apps` in attributes.
 - **`sensor.<child>_<device>_time_today`**: Screen time for specific device.
 - **`switch.<child>_<device>_lock`**: Turn ON to lock device, OFF to unlock.
-- **`button.<child>_<device>_15m` / `30m` / `60m`**: Press to grant bonus time.
-- **`number.<child>_<device>_grant_bonus`**: Enter custom minutes.
+- **`button.<child>_<device>_30m`**: Press to grant +30 minutes of bonus screen time.
 
-### 2. Dashboard Card Examples
+### 2. Dashboard Card (Interactive List + Pop-up Controls)
 
-#### Entities Card
 ```yaml
 type: entities
-title: "👧 Sofia Devices"
+title: "👧 Экранное время Софии"
 entities:
-  - entity: sensor.sofia_screen_time_today
-    name: "Total Screen Time"
-  - entity: sensor.sofia_tablet_time_today
-    name: "Tablet Usage"
-  - entity: switch.sofia_tablet_lock
-    name: "Lock Tablet"
-  - entity: button.sofia_tablet_30m
-    name: "Grant +30 min"
-```
-
-#### Top Apps Breakdown (Markdown Card)
-```yaml
-type: markdown
-title: "🎮 Top Apps Today"
-content: >
-  **Total:** {{ state_attr('sensor.sofia_screen_time_today', 'formatted_time') }}
-
-  {% for app in state_attr('sensor.sofia_screen_time_today', 'top_apps') %}
-    - **{{ app.title }}**: {{ app.minutes }} min
-  {% endfor %}
+  - entity: sensor.family_link_sofiia_sofiia_screen_time_today
+    name: "Всего за сегодня"
+    icon: mdi:timer-outline
+  - type: custom:fold-entity-row
+    head:
+      entity: sensor.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_time_today
+      name: "Планшет"
+      icon: mdi:tablet-android
+    entities:
+      - entity: switch.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_lock
+        name: "Блокировка экрана"
+      - entity: button.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_30m
+        name: "Добавить +30 мин"
 ```

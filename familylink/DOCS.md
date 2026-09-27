@@ -53,67 +53,53 @@ For each supervised phone or tablet:
 - Turn **ON**: Instantly locks the child's screen.
 - Turn **OFF**: Unlocks the device screen.
 
-### 2. Quick Bonus Buttons
-- `button.<child_name>_<device_name>_15m` (+15 minutes)
+### 2. Quick Bonus Button
 - `button.<child_name>_<device_name>_30m` (+30 minutes)
-- `button.<child_name>_<device_name>_60m` (+60 minutes)
-Pressing the button immediately grants extra screen time on top of daily limits.
-
-### 3. Custom Bonus Duration Input
-- **Entity ID**: `number.<child_name>_<device_name>_grant_bonus`
-- Enter any number of minutes (e.g., 45) to grant a custom bonus.
+Pressing the button immediately grants extra 30 minutes of screen time on top of daily limits.
 
 ---
 
 ## 🎨 Dashboard Card Examples (Lovelace)
 
-### Example 1: Entities Card (Simple)
-Add an **Entities** card to your dashboard:
+### Interactive Devices List with Pop-up / Sub-card Controls:
 
 ```yaml
 type: entities
-title: "👧 Sofia Screen Time"
+title: "👧 Экранное время Софии"
 entities:
-  - entity: sensor.sofia_screen_time_today
-    name: "Total Screen Time Today"
-  - entity: sensor.sofia_tablet_time_today
-    name: "Tablet Time"
-  - entity: switch.sofia_tablet_lock
-    name: "Lock Tablet"
-  - entity: button.sofia_tablet_15m
-    name: "Add +15 min"
-  - entity: button.sofia_tablet_30m
-    name: "Add +30 min"
-```
-
-### Example 2: Markdown Card (Display Top Apps)
-Add a **Markdown** card to show the breakdown of top used apps:
-
-```yaml
-type: markdown
-title: "🎮 Top Used Apps Today"
-content: >
-  **Total:** {{ state_attr('sensor.sofia_screen_time_today', 'formatted_time') }}
-
-  {% for app in state_attr('sensor.sofia_screen_time_today', 'top_apps') %}
-    - **{{ app.title }}**: {{ app.minutes }} min
-  {% endfor %}
-```
-
-### Example 3: Automatic Notification on Expired Cookies/Token
-Create an automation to notify your smartphone if authentication requires attention:
-
-```yaml
-alias: "Family Link Auth Alert"
-trigger:
-  - platform: state
-    entity_id: binary_sensor.family_link_auth_problem
-    to: "on"
-action:
-  - service: notify.persistent_notification
-    data:
-      title: "Family Link Needs Attention"
-      message: "Family Link credentials have expired. Please update token in add-on."
+  - entity: sensor.family_link_sofiia_sofiia_screen_time_today
+    name: "Всего за сегодня"
+    icon: mdi:timer-outline
+  - type: custom:fold-entity-row
+    head:
+      entity: sensor.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_time_today
+      name: "Планшет"
+      icon: mdi:tablet-android
+    entities:
+      - entity: switch.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_lock
+        name: "Блокировка экрана"
+      - entity: button.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_30m
+        name: "Добавить +30 мин"
+  - type: custom:fold-entity-row
+    head:
+      entity: sensor.sofiia_flip_5_sm_f731n_sofiia_flip_5_sm_f731n_time_today
+      name: "Flip 5"
+      icon: mdi:cellphone
+    entities:
+      - entity: switch.sofiia_flip_5_sm_f731n_sofiia_flip_5_sm_f731n_lock
+        name: "Блокировка экрана"
+      - entity: button.sofiia_flip_5_sm_f731n_sofiia_flip_5_sm_f731n_30m
+        name: "Добавить +30 мин"
+  - type: custom:fold-entity-row
+    head:
+      entity: sensor.sofiia_mi_8_sofiia_mi_8_time_today
+      name: "MI 8"
+      icon: mdi:cellphone-basic
+    entities:
+      - entity: switch.sofiia_mi_8_sofiia_mi_8_lock
+        name: "Блокировка экрана"
+      - entity: button.sofiia_mi_8_sofiia_mi_8_30m
+        name: "Добавить +30 мин"
 ```
 
 ---
