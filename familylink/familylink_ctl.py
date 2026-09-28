@@ -10,6 +10,7 @@ from datetime import datetime
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import sys
 import time
@@ -46,8 +47,22 @@ class FamilyLinkClient:
         self.load_auth()
 
     def load_auth(self):
-        """Load credentials from credentials.json (Master Token) or cookies.json"""
-        if self.credentials_file.exists():
+        """Load credentials from environment (add-on), credentials.json (Master Token) or cookies.json"""
+        email = os.getenv("GOOGLE_EMAIL")
+        master_token = os.getenv("MASTER_TOKEN")
+        android_id = os.getenv("ANDROID_ID")
+        if email and master_token:
+            if not self.master_token_info or self.master_token_info.get("master_token") != master_token:
+                self.master_token_info = {
+                    "email": email,
+                    "master_token": master_token,
+                    "android_id": android_id or "0123456789abcdef",
+                }
+                logger.info("Loaded Master Token configuration from environment.")
+                self._ensure_master_session()
+            return
+
+        if self.credentials_file and self.credentials_file.exists():
             try:
                 creds = json.loads(self.credentials_file.read_text())
                 if creds.get("master_token") and creds.get("email"):
@@ -232,8 +247,8 @@ class FamilyLinkClient:
             device_names[dev.get("deviceId")] = name
 
         sessions = data.get("appUsageSessions", [])
-        if not sessions:
-            return {"date": None, "total_seconds": 0, "by_device": [], "by_app": []}
+        now = datetime.now()
+        today_tuple = (now.year, now.month, now.day)
 
         if target_date:
             try:
@@ -246,10 +261,19 @@ class FamilyLinkClient:
                 (s["date"]["year"], s["date"]["month"], s["date"]["day"])
                 for s in sessions if "date" in s
             ]
-            target_tuple = max(all_dates) if all_dates else None
+            max_date = max(all_dates) if all_dates else None
+            # If the device has sessions recorded for a date ahead of local time (e.g. timezone difference),
+            # respect the device's date. Otherwise, default to today's date so that usage resets to 0
+            # when a new day starts.
+            if max_date and max_date > today_tuple:
+                target_tuple = max_date
+            else:
+                target_tuple = today_tuple
 
-        if not target_tuple:
-            return {"date": None, "total_seconds": 0, "by_device": [], "by_app": []}
+        date_str = f"{target_tuple[0]}-{target_tuple[1]:02d}-{target_tuple[2]:02d}"
+
+        if not sessions:
+            return {"date": date_str, "total_seconds": 0, "by_device": [], "by_app": []}
 
         by_device = defaultdict(float)
         by_app = defaultdict(float)

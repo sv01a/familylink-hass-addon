@@ -26,8 +26,6 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_USER = os.getenv("MQTT_USER", "")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 300))
-COOKIES_FILE = os.getenv("COOKIES_FILE", "cookies.json")
-CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")
 
 DISCOVERY_PREFIX = "homeassistant"
 BASE_TOPIC = "familylink"
@@ -47,7 +45,7 @@ signal.signal(signal.SIGTERM, handle_signal)
 
 class FamilyLinkMQTTBridge:
     def __init__(self):
-        self.client_fl = FamilyLinkClient(cookies_file=COOKIES_FILE, credentials_file=CREDENTIALS_FILE)
+        self.client_fl = FamilyLinkClient()
         try:
             self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="familylink_bridge")
         except AttributeError:
@@ -499,13 +497,16 @@ class FamilyLinkMQTTBridge:
         self.mqtt_client.loop_start()
 
         last_poll = 0
+        last_date = datetime.now().date()
         global running
         try:
             while running:
                 now = time.time()
-                if now - last_poll >= POLL_INTERVAL:
+                current_date = datetime.now().date()
+                if current_date != last_date or (now - last_poll >= POLL_INTERVAL):
                     self.poll_and_publish_stats()
                     last_poll = now
+                    last_date = current_date
                 time.sleep(1)
         finally:
             logger.info("Stopping MQTT client...")
