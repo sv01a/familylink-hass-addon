@@ -9,6 +9,8 @@ Thumbs.db
 .vscode/
 
 # Secrets & Credentials (never commit real tokens or cookies!)
+AGENTS.md
+CLAUDE.md
 cookies.json
 *.cookies
 credentials.json
