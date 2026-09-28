@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 300))
 
 DISCOVERY_PREFIX = "homeassistant"
+BRIDGE_VERSION = "1.4.0"
 BASE_TOPIC = "familylink"
 
 running = True
@@ -159,6 +161,28 @@ class FamilyLinkMQTTBridge:
                         # Immediately reflect active bonus in sensors
                         self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/bonus_remaining/state", str(mins), retain=True)
                         self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/is_locked/state", "OFF", retain=True)
+                        threading.Thread(target=self.poll_and_publish_stats, daemon=True).start()
+
+                # 4. Cancel bonus button
+                elif cmd_type in ("cancel_bonus", "cancel_bonus_time"):
+                    logger.info(f"Cancelling active bonus for device {dev_info['name']}...")
+                    ok = self.client_fl.cancel_bonus_time(child_id, dev_id)
+                    if ok:
+                        self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/bonus_remaining/state", "0", retain=True)
+                        threading.Thread(target=self.poll_and_publish_stats, daemon=True).start()
+
+                # 5. Daily limit (number input)
+                elif cmd_type in ("daily_limit", "set_daily_limit"):
+                    try:
+                        mins = int(float(payload))
+                        if 0 <= mins <= 1440:
+                            logger.info(f"Setting daily limit for {dev_info['name']} to {mins} min...")
+                            ok = self.client_fl.set_daily_limit(child_id, dev_id, mins)
+                            if ok:
+                                self.mqtt_client.publish(f"{BASE_TOPIC}/{dev_id}/daily_limit/state", str(mins), retain=True)
+                                threading.Thread(target=self.poll_and_publish_stats, daemon=True).start()
+                    except ValueError:
+                        logger.warning(f"Invalid daily limit payload: {payload}")
 
         except Exception as e:
             logger.error(f"Error handling MQTT message: {e}")
@@ -173,7 +197,7 @@ class FamilyLinkMQTTBridge:
             "name": "Google Family Link Bridge",
             "manufacturer": "Google Family Link",
             "model": "Add-on Bridge",
-            "sw_version": "1.3.1",
+            "sw_version": BRIDGE_VERSION,
         }
 
         problem_config = {
@@ -367,6 +391,56 @@ class FamilyLinkMQTTBridge:
                     retain=True,
                 )
 
+                # Cancel Bonus Button: Cancels any active bonus time override!
+                cancel_button_config = {
+                    "name": f"{ch['name']} {dev_name} Cancel Bonus",
+                    "unique_id": f"familylink_btn_{dev_id}_cancel_bonus",
+                    "command_topic": f"{BASE_TOPIC}/{dev_id}/cancel_bonus/set",
+                    "payload_press": "PRESS",
+                    "icon": "mdi:gift-off-outline",
+                    "device": hw_device,
+                }
+                self.mqtt_client.publish(
+                    f"{DISCOVERY_PREFIX}/button/familylink_{dev_id}/cancel_bonus/config",
+                    json.dumps(cancel_button_config),
+                    retain=True,
+                )
+
+                # Number input to configure and apply today's daily limit (0-1440 min)
+                daily_limit_config = {
+                    "name": f"{ch['name']} {dev_name} Daily Limit",
+                    "unique_id": f"familylink_num_{dev_id}_daily_limit",
+                    "command_topic": f"{BASE_TOPIC}/{dev_id}/daily_limit/set",
+                    "state_topic": f"{BASE_TOPIC}/{dev_id}/daily_limit/state",
+                    "min": 0,
+                    "max": 1440,
+                    "step": 15,
+                    "unit_of_measurement": "min",
+                    "mode": "box",
+                    "icon": "mdi:clock-check-outline",
+                    "device": hw_device,
+                }
+                self.mqtt_client.publish(
+                    f"{DISCOVERY_PREFIX}/number/familylink_{dev_id}/daily_limit/config",
+                    json.dumps(daily_limit_config),
+                    retain=True,
+                )
+
+                # Sensor for current daily limit
+                daily_limit_sensor_config = {
+                    "name": f"{ch['name']} {dev_name} Daily Limit",
+                    "unique_id": f"familylink_sensor_{dev_id}_daily_limit",
+                    "state_topic": f"{BASE_TOPIC}/{dev_id}/daily_limit/state",
+                    "unit_of_measurement": "min",
+                    "icon": "mdi:clock-check-outline",
+                    "device": hw_device,
+                }
+                self.mqtt_client.publish(
+                    f"{DISCOVERY_PREFIX}/sensor/familylink_{dev_id}/daily_limit/config",
+                    json.dumps(daily_limit_sensor_config),
+                    retain=True,
+                )
+
                 # Clean up legacy entities
                 for b_suffix in ("bonus_15", "bonus_30", "bonus_60", "plus_15", "plus_30", "plus_60", "grant_bonus"):
                     self.mqtt_client.publish(f"{DISCOVERY_PREFIX}/button/familylink_{dev_id}/{b_suffix}/config", "", retain=True)
@@ -464,6 +538,14 @@ class FamilyLinkMQTTBridge:
                     self.mqtt_client.publish(
                         f"{BASE_TOPIC}/{dev_id}/bonus_remaining/state",
                         str(active_bonus),
+                        retain=True,
+                    )
+
+                    # Update daily limit sensor and number state
+                    daily_limit_mins = lim.get("daily_limit_minutes", 0)
+                    self.mqtt_client.publish(
+                        f"{BASE_TOPIC}/{dev_id}/daily_limit/state",
+                        str(daily_limit_mins),
                         retain=True,
                     )
 

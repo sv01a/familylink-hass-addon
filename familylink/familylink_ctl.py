@@ -29,6 +29,16 @@ logging.basicConfig(
 logger = logging.getLogger("familylink_ctl")
 
 BASE_URL = "https://kidsmanagement-pa.clients6.google.com/kidsmanagement/v1"
+
+DAY_CODES = {
+    1: "CAEQAQ",
+    2: "CAEQAg",
+    3: "CAEQAw",
+    4: "CAEQBA",
+    5: "CAEQBQ",
+    6: "CAEQBg",
+    7: "CAEQBw",
+}
 ORIGIN = "https://familylink.google.com"
 API_KEY = "AIzaSyAQb1gupaJhY3CXQy2xmTwJMcjmot3M2hw"
 
@@ -346,8 +356,8 @@ class FamilyLinkClient:
             }
         return result
 
-    def get_active_bonus_time(self, account_id):
-        """Calculate active bonus minutes remaining per device from timeLimit overrides"""
+    def get_active_bonuses(self, account_id):
+        """Get active bonuses with remaining minutes and override IDs per device"""
         url = f"{BASE_URL}/people/{account_id}/timeLimit"
         r = self.session.get(url, headers=self._get_headers())
         if r.status_code == 401 and self.master_token_info:
@@ -362,7 +372,7 @@ class FamilyLinkClient:
         overrides = data.get("timeLimit", {}).get("overrides", [])
         now_ms = int(time.time() * 1000)
 
-        bonus_by_dev = defaultdict(int)
+        bonus_by_dev = defaultdict(lambda: {"minutes": 0, "override_ids": []})
 
         for o in overrides:
             if o.get("action") == "unlockFor":
@@ -375,9 +385,116 @@ class FamilyLinkClient:
                 if expires_ms > now_ms:
                     rem_sec = (expires_ms - now_ms) // 1000
                     rem_mins = int((rem_sec + 59) // 60)
-                    bonus_by_dev[dev_id] += rem_mins
+                    bonus_by_dev[dev_id]["minutes"] += rem_mins
+                    oid = (
+                        o.get("overrideId")
+                        or o.get("id")
+                        or (o.get("name", "").split("/")[-1] if o.get("name") else None)
+                    )
+                    if oid:
+                        bonus_by_dev[dev_id]["override_ids"].append(oid)
 
         return dict(bonus_by_dev)
+
+    def get_active_bonus_time(self, account_id):
+        """Calculate active bonus minutes remaining per device from timeLimit overrides"""
+        bonuses = self.get_active_bonuses(account_id)
+        return {dev_id: b["minutes"] for dev_id, b in bonuses.items()}
+
+    def cancel_bonus_time(self, account_id, device_id):
+        """Cancel active bonus screen time for a device"""
+        bonuses = self.get_active_bonuses(account_id)
+        dev_bonus = bonuses.get(device_id)
+        if not dev_bonus or not dev_bonus.get("override_ids"):
+            logger.info(f"No active bonus override found for device {device_id} to cancel.")
+            return True
+
+        all_ok = True
+        for override_id in dev_bonus["override_ids"]:
+            url = f"{BASE_URL}/people/{account_id}/timeLimitOverride/{override_id}?$httpMethod=DELETE"
+            headers = self._get_headers()
+            headers["Content-Type"] = "application/json+protobuf"
+            r = self.session.post(url, headers=headers)
+            if r.status_code == 401 and self.master_token_info:
+                self._ensure_master_session(force=True)
+                headers = self._get_headers()
+                headers["Content-Type"] = "application/json+protobuf"
+                r = self.session.post(url, headers=headers)
+
+            if r.status_code in (200, 204):
+                logger.info(f"Successfully cancelled bonus time for device {device_id} (override {override_id})!")
+            else:
+                logger.error(f"Failed to cancel bonus time ({r.status_code}): {r.text[:200]}")
+                all_ok = False
+        return all_ok
+
+    def set_daily_limit(self, account_id, device_id, minutes):
+        """Set today's daily screen time limit in minutes for a device (0-1440 min)"""
+        minutes = max(0, min(1440, int(minutes)))
+        day = datetime.now().isoweekday()
+        day_code = DAY_CODES.get(day, "CAEQAQ")
+        url = f"{BASE_URL}/people/{account_id}/timeLimitOverrides:batchCreate"
+
+        payload = [
+            None,
+            account_id,
+            [
+                [
+                    None, None, 8, device_id,
+                    None, None, None, None, None, None, None,
+                    [2, minutes, day_code]
+                ]
+            ],
+            [1]
+        ]
+
+        headers = self._get_headers()
+        headers["Content-Type"] = "application/json+protobuf"
+        r = self.session.post(url, headers=headers, data=json.dumps(payload))
+        if r.status_code == 401 and self.master_token_info:
+            self._ensure_master_session(force=True)
+            headers = self._get_headers()
+            headers["Content-Type"] = "application/json+protobuf"
+            r = self.session.post(url, headers=headers, data=json.dumps(payload))
+
+        if r.status_code == 200:
+            logger.info(f"Successfully set today's daily limit to {minutes}m for device {device_id}!")
+            return True
+        else:
+            logger.error(f"Failed to set daily limit ({r.status_code}): {r.text[:200]}")
+            return False
+
+    def set_weekly_daily_limit(self, account_id, minutes, day=None):
+        """Set recurring weekly daily limit for a weekday (1=Mon ... 7=Sun, defaults to today)"""
+        minutes = max(0, min(1440, int(minutes)))
+        if day is None:
+            day = datetime.now().isoweekday()
+        day_code = DAY_CODES.get(day, "CAEQAQ")
+        url = f"{BASE_URL}/people/{account_id}/timeLimit:update?$httpMethod=PUT"
+
+        payload = [
+            None,
+            account_id,
+            [None, [[2, None, None, [[day_code, minutes]]]]],
+            None,
+            [1],
+        ]
+
+        headers = self._get_headers()
+        headers["Content-Type"] = "application/json+protobuf"
+        r = self.session.post(url, headers=headers, data=json.dumps(payload))
+        if r.status_code == 401 and self.master_token_info:
+            self._ensure_master_session(force=True)
+            headers = self._get_headers()
+            headers["Content-Type"] = "application/json+protobuf"
+            r = self.session.post(url, headers=headers, data=json.dumps(payload))
+
+        if r.status_code == 200:
+            logger.info(f"Successfully set recurring weekly limit for day {day} to {minutes}m!")
+            return True
+        else:
+            logger.error(f"Failed to set weekly limit ({r.status_code}): {r.text[:200]}")
+            return False
 
     def grant_bonus_time(self, account_id, device_id, minutes):
         """Grant bonus screen time in minutes"""
@@ -449,6 +566,10 @@ def main():
     parser.add_argument("--limits", action="store_true", help="Show time limits and remaining time")
     parser.add_argument("--date", help="Date in YYYY-MM-DD format")
     parser.add_argument("--bonus", type=int, help="Grant bonus time (minutes)")
+    parser.add_argument("--cancel-bonus", action="store_true", help="Cancel active bonus time")
+    parser.add_argument("--daily-limit", type=int, help="Set today's daily limit (minutes)")
+    parser.add_argument("--weekly-limit", type=int, help="Set recurring weekly daily limit (minutes)")
+    parser.add_argument("--day", type=int, choices=range(1, 8), help="ISO weekday (1=Mon ... 7=Sun) for weekly limit")
     parser.add_argument("--lock", action="store_true", help="Lock device")
     parser.add_argument("--unlock", action="store_true", help="Unlock device")
     parser.add_argument("--child", help="Child ID (optional, defaults to first child)")
@@ -485,6 +606,7 @@ def main():
             lim = limits.get(dev_id, {})
             b = bonuses.get(dev_id, 0)
             print(f"  📱 {d['name']}:")
+            print(f"     Daily limit: {lim.get('daily_limit_minutes', 0)} min")
             print(f"     Locked: {lim.get('is_locked', False)} ({lim.get('active_policy', 'none')})")
             print(f"     Remaining quota: {lim.get('remaining_minutes', 0)} min")
             print(f"     Active bonus remaining: {b} min")
@@ -525,6 +647,12 @@ def main():
 
     if args.bonus:
         client.grant_bonus_time(child_id, device_id, args.bonus)
+    elif args.cancel_bonus:
+        client.cancel_bonus_time(child_id, device_id)
+    elif args.daily_limit is not None:
+        client.set_daily_limit(child_id, device_id, args.daily_limit)
+    elif args.weekly_limit is not None:
+        client.set_weekly_daily_limit(child_id, args.weekly_limit, day=args.day)
     elif args.lock:
         client.control_device(child_id, device_id, action="lock")
     elif args.unlock:

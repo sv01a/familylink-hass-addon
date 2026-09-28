@@ -15,7 +15,8 @@ An MQTT bridge for **Google Family Link** integration with automatic **Home Assi
 - 🔒 **Screen Lock Status**: Real-time binary sensor (`binary_sensor`) showing whether the device is currently locked.
 - 🎮 **Top Applications Usage**: Breakdown of used apps with duration stored in sensor attributes.
 - 🛑 **Remote Screen Lock**: Toggle switch (`switch`) to remotely lock/unlock screens.
-- 🎁 **Safe Two-Step Bonus**: Number input (`number`) to choose duration (30 min default) + dedicated confirm button (`button`) to apply.
+- ⏱️ **Daily Limit Adjustment**: Number input (`number`) to change today's daily limit in minutes, plus live quota sensor (`sensor`).
+- 🎁 **Safe Two-Step Bonus & Cancel**: Number input (`number`) to choose duration + dedicated confirm button (`button`) to apply, plus a cancel bonus button (`button`).
 - 🔑 **Permanent Authentication**: Long-lived Google Master Token (`aas_et/...`) support via Google Play Services OAuth flow.
 - 🚀 **Zero-Config Entities**: Automatically registers devices, sensors, and switches in Home Assistant via MQTT Discovery without touching `configuration.yaml`.
 

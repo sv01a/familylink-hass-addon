@@ -62,6 +62,11 @@ For each supervised phone or tablet:
 To prevent accidental bonus grants:
 1. **`number.<child_name>_<device_name>_bonus_duration`**: Set desired minutes (default is **30 min**). Changing this value **does not** grant time.
 2. **`button.<child_name>_<device_name>_grant_bonus`**: Click this button to **confirm and grant** the selected bonus time to the device.
+3. **`button.<child_name>_<device_name>_cancel_bonus`**: Instantly cancel active bonus time overrides.
+
+### 3. Daily Screen Time Limit Control
+- **`number.<child_name>_<device_name>_daily_limit`**: Set today's daily screen time limit in minutes (0 to 1440 min). Changes take effect immediately on the child's device!
+- **`sensor.<child_name>_<device_name>_daily_limit`**: Displays the active daily limit in minutes.
 
 ---
 
@@ -94,4 +99,8 @@ entities:
         name: "Длительность бонуса (мин)"
       - entity: button.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_grant_bonus
         name: "Выдать бонус"
+      - entity: button.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_cancel_bonus
+        name: "Отменить бонус"
+      - entity: number.sofiia_planshet_23043rp34g_sofiia_planshet_23043rp34g_daily_limit
+        name: "Дневной лимит (мин)"
 ```
